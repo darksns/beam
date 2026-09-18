@@ -1,0 +1,242 @@
+#!/usr/bin/env node
+/* beam — CLI: talks to the local hub, which relays to the Chrome extension.
+ * Starts the hub by itself when it is not running. Compact text output. */
+'use strict';
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
+const { spawn } = require('child_process');
+
+const PORT = Number(process.env.BEAM_PORT || 8777);
+const BASE = `http://127.0.0.1:${PORT}`;
+const SERVER = path.join(__dirname, '..', 'server', 'server.js');
+const HOME = process.env.BEAM_HOME || path.join(os.homedir(), '.beam');
+
+/* the hub writes this on first run; it is what proves we are not a web page */
+function token() {
+  try { return fs.readFileSync(path.join(HOME, 'token'), 'utf8').trim(); }
+  catch (e) { return ''; }
+}
+
+/* ---------------------------------------------------------------- args */
+
+/* value-less flags: otherwise they would swallow the argument that follows
+   (e.g. `beam set --dry '{...}'`) */
+const BOOL = new Set(['json', 'dry', 'hidden', 'raw', 'background', 'stop', 'all', 'force']);
+
+const argv = process.argv.slice(2);
+const op = argv.shift();
+const positional = [];
+const opts = {};
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a.startsWith('--')) {
+    const key = a.slice(2);
+    const next = argv[i + 1];
+    if (BOOL.has(key) || next === undefined || next.startsWith('--')) opts[key] = true;
+    else { opts[key] = /^\d+$/.test(next) ? Number(next) : next; i++; }
+  } else positional.push(a);
+}
+
+const HELP = `beam — drive Chrome as text
+
+  read
+    beam snap    [--sel CSS] [--max N] [--hidden]   interactive elements, with @n refs
+    beam outline [--sel CSS] [--depth N]            structure tree
+    beam fields  [--sel CSS] [--hidden]             every form field (JSON)
+    beam text    [--sel CSS] [--max N] [--from N]   readable text
+    beam html    [--sel CSS] [--max N]              raw HTML
+    beam info | tabs | frames
+
+  act
+    beam open <url> [--newTab false] [--background]
+    beam nav <url> | reload | back | forward | close | use <tab>
+    beam click <target>
+    beam fill <target> <value>
+    beam select <target> <value>
+    beam check <target> [on|off]
+    beam press <Key>
+    beam upload <target> <url>          download a file into an input[type=file]
+    beam set '<json>' | @file.json      fill many fields at once (--dry to preview)
+    beam do  '<json>' | @file.json      a sequence of steps in one round trip
+    beam wait [--sel CSS] [--text T] [--timeout ms]
+    beam shot [--out file.jpg]          screenshot to a file (only when truly needed)
+
+  target: @12 (ref from snap) · @3:12 (ref inside frame 3) · css=.klass · text=Update
+          label=Title · name=post_title
+  global: --tab <id>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
+`;
+
+if (!op || op === 'help' || op === '--help' || op === '-h') { process.stdout.write(HELP); process.exit(0); }
+
+/* -------------------------------------------------------------- server */
+
+async function health() {
+  try {
+    const r = await fetch(BASE + '/health', {
+      headers: { 'x-beam-token': token() },
+      signal: AbortSignal.timeout(1500)
+    });
+    if (r.status === 401) return { unauthorized: true };
+    return await r.json();
+  } catch (e) { return null; }
+}
+
+async function ensureServer() {
+  const h = await health();
+  if (h && h.unauthorized) {
+    console.error('the hub on port ' + PORT + ' does not accept this token.\n' +
+      'It is probably an older instance: stop it (`beam server --stop`) and retry.');
+    process.exit(1);
+  }
+  if (h) return true;
+  const child = spawn(process.execPath, [SERVER], { detached: true, stdio: 'ignore' });
+  child.unref();
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    const s = await health();
+    if (s && !s.unauthorized) return true;
+  }
+  return false;
+}
+
+/* ------------------------------------------------------------ commands */
+
+function readArg(v) {
+  if (typeof v === 'string' && v.startsWith('@') && v.length > 1 && !/^@\d+$/.test(v)) {
+    return fs.readFileSync(v.slice(1), 'utf8');
+  }
+  return v;
+}
+
+/* "@3:14" means ref 14 inside frame 3: the frame is pulled out here, so a
+   target copied from a multi-frame snap works with no extra flags */
+function splitFrame(cmd, key) {
+  const m = /^@(\d+):(\d+)$/.exec(String(cmd[key] || ''));
+  if (!m) return;
+  if (cmd.frame == null) cmd.frame = Number(m[1]);
+  cmd[key] = '@' + m[2];
+}
+
+function build() {
+  const cmd = { op };
+  for (const k of Object.keys(opts)) cmd[k] = opts[k];
+
+  switch (op) {
+    case 'open': case 'nav': cmd.url = positional[0]; break;
+    case 'use': cmd.tab = positional[0]; break;
+    case 'click': cmd.target = positional[0]; break;
+    case 'fill': case 'select':
+      cmd.target = positional[0];
+      cmd.value = positional.slice(1).join(' ');
+      break;
+    case 'check':
+      cmd.target = positional[0];
+      cmd.value = positional[1] === undefined ? true : !/^(off|false|0|no)$/i.test(positional[1]);
+      break;
+    case 'press': cmd.key = positional[0]; break;
+    case 'upload': cmd.target = positional[0]; cmd.url = positional[1]; break;
+    case 'set': cmd.map = JSON.parse(readArg(positional[0])); break;
+    case 'do': {
+      const parsed = JSON.parse(readArg(positional[0]));
+      cmd.steps = Array.isArray(parsed) ? parsed : parsed.steps;
+      break;
+    }
+    case 'text': case 'html': case 'snap': case 'outline': case 'fields':
+      if (positional[0] && !opts.sel) cmd.sel = positional[0];
+      break;
+  }
+  if (cmd.newTab === 'false') cmd.newTab = false;
+  if (cmd.target) splitFrame(cmd, 'target');
+  if (cmd.frame === 'true') cmd.frame = 'all';
+  return cmd;
+}
+
+/* -------------------------------------------------------------- render */
+
+function render(op, r) {
+  if (opts.json) return JSON.stringify(r, null, 2);
+  if (r == null) return 'ok';
+
+  if (op === 'snap') {
+    return [`${r.title}`, `${r.url}`, `${r.elements} elements${r.truncated ? ' · ' + r.truncated : ''}`, '', r.outline].join('\n');
+  }
+  if (op === 'outline') return [`${r.title}`, `${r.url}`, '', r.structure].join('\n');
+  if (op === 'text') return [`${r.title} · ${r.chars} characters`, '', r.text].join('\n');
+  if (op === 'html') return r.html;
+  if (op === 'tabs') {
+    return r.map((t) => `${t.current ? '*' : ' '} [${t.tab}] ${(t.title || '').slice(0, 60)}\n      ${t.url}`).join('\n');
+  }
+  if (op === 'fields') {
+    const cut = (v) => {
+      const s = String(v == null ? '' : v);
+      return JSON.stringify(s.length > 200 ? s.slice(0, 200) + '…' : s) +
+        (s.length > 200 ? `  (${s.length} characters: --json for the whole value)` : '');
+    };
+    return [`${r.count} fields · ${r.url}`, ''].concat(r.fields.map((f) =>
+      `${f.ref} ${f.type}${f.required ? '*' : ''}${f.hidden ? ' (hidden)' : ''}  "${f.label}"` +
+      `\n    name=${f.name || '—'}  sel=${f.selector}` +
+      `\n    = ${cut(f.value)}`)).join('\n');
+  }
+  if (op === 'frames') {
+    return r.map((f) => `[${f.frame}]${f.injectable ? '' : ' (not injectable)'} ${f.title || ''}\n     ${f.url}`).join('\n');
+  }
+  if (op === 'upload') return `${r.uploaded} · ${Math.round(r.bytes / 1024)} KB · ${r.type}`;
+  if (op === 'do') {
+    return r.steps.map((s) => `${s.error ? '✗' : '✓'} ${s.step} ${s.op}  ${s.error || JSON.stringify(s.result)}`).join('\n');
+  }
+  if (op === 'set' && r.dry) {
+    const ch = r.changes.filter((c) => c.changed);
+    return [`preview: ${ch.length} fields would change out of ${r.changes.length} resolved`, '']
+      .concat(ch.map((c) => `~ ${c.label}\n    - ${JSON.stringify(c.from)}\n    + ${JSON.stringify(c.to)}`))
+      .concat(r.errors.length ? ['', '✗ ' + r.errors.join('\n✗ ')] : []).join('\n');
+  }
+  if (op === 'set') {
+    return `${r.filled} filled` + (r.errors.length ? '\n✗ ' + r.errors.join('\n✗ ') : '');
+  }
+  return JSON.stringify(r, null, 2);
+}
+
+/* ----------------------------------------------------------------- run */
+
+(async () => {
+  if (op === 'server') {
+    const h = await health();
+    if (opts.stop) {
+      if (h && h.pid) process.kill(h.pid);
+      console.log(h && h.pid ? 'server stopped' : 'not running');
+      return;
+    }
+    if (h && !h.unauthorized) { console.log(JSON.stringify(h, null, 2)); return; }
+    await ensureServer();
+    console.log(JSON.stringify(await health(), null, 2));
+    return;
+  }
+
+  if (!(await ensureServer())) {
+    console.error('cannot start the local hub (' + SERVER + ')');
+    process.exit(1);
+  }
+
+  let cmd;
+  try { cmd = build(); }
+  catch (e) { console.error('invalid arguments: ' + e.message); process.exit(1); }
+
+  const res = await fetch(BASE + '/cmd', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-beam-token': token() },
+    body: JSON.stringify(cmd)
+  }).then((r) => r.json());
+
+  if (!res.ok) { console.error('✗ ' + res.error); process.exit(2); }
+
+  if (op === 'shot' && res.result && res.result.dataUrl) {
+    const out = opts.out || path.join(os.tmpdir(), `beam-shot-${Date.now()}.jpg`);
+    const b64 = res.result.dataUrl.replace(/^data:[^,]+,/, '');
+    fs.writeFileSync(out, Buffer.from(b64, 'base64'));
+    console.log(out);
+    return;
+  }
+
+  console.log(render(op, res.result));
+})().catch((e) => { console.error(String(e && e.message || e)); process.exit(1); });

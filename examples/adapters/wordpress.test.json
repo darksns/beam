@@ -1,0 +1,38 @@
+{
+  "host": "wordpress.test",
+  "cms": "WordPress 7.1 · block editor · \"Aura\" builder active",
+  "note": [
+    "post-new.php is hijacked by the Aura builder: add ?aipb=skip for the standard editor",
+    "the editor remembers the last mode used (visual or code): always check how it opened",
+    "the code editor's textarea ids are generated: re-read them with `beam fields` every time",
+    "in visual mode the canvas is a blob: iframe (variable frame id, read it with `beam frames`)"
+  ],
+  "tasks": {
+    "post.create": {
+      "url": "https://wordpress.test/wp-admin/post-new.php?post_type=post&aipb=skip",
+      "prepare": [
+        "if it is not already in code mode: Options → 'Code editor' (find the entry with `beam snap --max 250 | grep -i code`)"
+      ],
+      "fields": {
+        "title": "css=#inspector-textarea-control-0",
+        "body": "css=#post-content-0"
+      },
+      "body_format": "gutenberg",
+      "featured_image": {
+        "open": "text=Set featured image",
+        "pick_first": "css=.media-modal .attachments li",
+        "confirm": "css=.media-frame-toolbar button"
+      },
+      "save_draft": "text=Save draft",
+      "verify": "https://wordpress.test/wp-admin/edit.php?post_type=post",
+      "verify_hint": "the post row shows '— Draft' after the title"
+    },
+    "media.upload": {
+      "url": "https://wordpress.test/wp-admin/media-new.php?browser-uploader",
+      "input": "css=#async-upload",
+      "submit": "css=#html-upload",
+      "after": "redirects to the media library; id and URL are read from upload.php?mode=list, first row"
+    }
+  },
+  "verified": "2026-09-18"
+}
