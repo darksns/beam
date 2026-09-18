@@ -5,7 +5,7 @@
 (function () {
   'use strict';
   /* the version lets a newer agent replace one that is already injected */
-  var VERSION = 4;
+  var VERSION = 5;
   if (window.__beam && window.__beam.version === VERSION) return;
 
   var MAXREF = 1500;
@@ -40,15 +40,45 @@
     return String(s).replace(/[^a-zA-Z0-9_-]/g, function (c) { return '\\' + c; });
   }
 
+  /* TinyMCE / jQuery live in the page world. We reach them through the MAIN
+     shim: a sync DOM event plus attributes, which both worlds share. */
+  var markN = 0;
+  function pageCall(req) {
+    var root = document.documentElement;
+    if (!root) return null;
+    try {
+      root.setAttribute('data-beam-shim', JSON.stringify(req));
+      root.removeAttribute('data-beam-shim-r');
+      document.dispatchEvent(new Event('__beam-shim'));
+      var raw = root.getAttribute('data-beam-shim-r');
+      root.removeAttribute('data-beam-shim');
+      root.removeAttribute('data-beam-shim-r');
+      if (!raw) return null;
+      var out = JSON.parse(raw);
+      return out && out.ok ? out.r : null;
+    } catch (e) {
+      try { root.removeAttribute('data-beam-shim'); root.removeAttribute('data-beam-shim-r'); } catch (e2) {}
+      return null;
+    }
+  }
+  function pageCallOn(el, req) {
+    if (!el || el.nodeType !== 1) return pageCall(req);
+    var mark = 'b' + (++markN);
+    el.setAttribute('data-beam-el', mark);
+    req.mark = mark;
+    try { return pageCall(req); }
+    finally { el.removeAttribute('data-beam-el'); }
+  }
+
   function cssPath(el) {
-    if (el.id) return '#' + el.id;
+    if (el.id) return '#' + esc(el.id);
     var parts = [], cur = el, depth = 0;
     while (cur && cur.nodeType === 1 && depth++ < 4) {
       var p = cur.tagName.toLowerCase();
-      if (cur.id) { parts.unshift('#' + cur.id); break; }
+      if (cur.id) { parts.unshift('#' + esc(cur.id)); break; }
       var cls = (cur.className && typeof cur.className === 'string')
         ? cur.className.trim().split(/\s+/).slice(0, 2) : [];
-      if (cls.length) p += '.' + cls.join('.');
+      if (cls.length) p += '.' + cls.map(esc).join('.');
       var self = cur;
       var sibs = cur.parentElement
         ? Array.prototype.filter.call(cur.parentElement.children, function (s) { return s.tagName === self.tagName; })
@@ -176,9 +206,9 @@
     }
     if (tag === 'input' && (el.type === 'checkbox' || el.type === 'radio')) return el.checked ? 'on' : 'off';
     if (tag === 'input' || tag === 'textarea') {
-      if (window.tinymce && el.id) {
-        var ed = window.tinymce.get(el.id);
-        if (ed && !ed.isHidden()) return ed.getContent({ format: 'text' });
+      if (el.id) {
+        var fromEd = pageCall({ op: 'tinymceGet', id: el.id });
+        if (fromEd != null) return fromEd;
       }
       return el.value;
     }
@@ -313,7 +343,7 @@
         : new Event(t, { bubbles: true });
       el.dispatchEvent(ev);
     });
-    if (window.jQuery) { try { window.jQuery(el).trigger('change'); } catch (e) {} }
+    pageCallOn(el, { op: 'notify', value: el.value });
   }
 
   function fill(target, value) {
@@ -331,20 +361,16 @@
       return check(target, value !== false && value !== 'off' && value !== '0');
     }
 
-    /* WordPress / TinyMCE wysiwyg */
-    var ed = window.tinymce && el.id && window.tinymce.get(el.id);
-    if (ed) {
-      var html = /<[a-z][\s\S]*>/i.test(value) ? value
-        : String(value).split(/\n{2,}/).map(function (p) { return '<p>' + p.replace(/\n/g, '<br />') + '</p>'; }).join('');
-      nativeSet(el, html);
-      fireAll(el, ['input', 'change']);
-      if (!ed.isHidden()) { ed.setContent(html); ed.fire('change'); ed.save(); }
-      return { filled: clean(value, 60), via: 'tinymce' };
-    }
-
+    /* WordPress / TinyMCE: the editor object is in the page world. The shim
+       tells us if it exists; we still write the textarea so the text tab
+       stays in sync. */
+    var html = /<[a-z][\s\S]*>/i.test(value) ? String(value)
+      : String(value).split(/\n{2,}/).map(function (p) { return '<p>' + p.replace(/\n/g, '<br />') + '</p>'; }).join('');
+    var via = el.id ? pageCall({ op: 'tinymceSet', id: el.id, html: html }) : null;
     el.focus();
-    nativeSet(el, value);
+    nativeSet(el, (via && via.via) ? html : String(value));
     fireAll(el, ['input', 'change', 'blur']);
+    if (via && via.via) return { filled: clean(value, 60), via: 'tinymce' };
     return { filled: clean(value, 60) };
   }
 
@@ -357,9 +383,7 @@
     if (!opt) throw new Error('option "' + value + '" is missing; available: ' +
       Array.prototype.map.call(el.options, function (o) { return o.textContent.trim(); }).slice(0, 15).join(' | '));
     nativeSet(el, opt.value);
-    var jq = window.jQuery;
-    if (jq && jq(el).data && jq(el).data('select2')) jq(el).val(opt.value).trigger('change');
-    else fireAll(el, ['input', 'change']);
+    fireAll(el, ['input', 'change']);
     return { selected: opt.textContent.trim() };
   }
 

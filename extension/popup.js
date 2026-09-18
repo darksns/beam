@@ -6,11 +6,14 @@ let editingPort = false;
 
 function paint(s) {
   const on = !!s.connected;
+  const dup = !!s.superseded;
   $('dot').className = 'dot ' + (on ? 'on' : 'off');
-  $('label').textContent = on ? 'Connected' : 'Not connected';
+  $('label').textContent = on ? 'Connected' : dup ? 'Another copy is connected' : 'Not connected';
   $('sub').textContent = on
     ? 'ready for commands'
-    : 'the local hub is not answering';
+    : dup
+      ? 'disable the leftover in chrome://extensions'
+      : 'the local hub is not answering';
   if (!editingPort) $('port').value = s.port;
   $('ver').textContent = s.version;
 
@@ -24,7 +27,9 @@ function paint(s) {
 
   $('hint').textContent = on
     ? ''
-    : 'Run any command in the terminal (the hub starts by itself), or hit Reconnect. If you set BEAM_PORT, match it here.';
+    : dup
+      ? 'This copy lost the hub socket. Unload the other Beam in chrome://extensions, or hit Reconnect to take over.'
+      : 'Run any command in the terminal (the hub starts by itself), or hit Reconnect. If you set BEAM_PORT, match it here.';
 }
 
 async function refresh() {

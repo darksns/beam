@@ -9,7 +9,10 @@
  *                     a web page cannot drive your browser through this port.
  *   upgrade (WS)      only accepts an Origin of chrome-extension://…, so a page
  *                     cannot impersonate the extension and hijack the command
- *                     stream. Pin a single extension with BEAM_EXTENSION_ID.
+ *                     stream. The socket is not adopted until a `hello` frame.
+ *                     A second copy with a different runtime id takes over and
+ *                     the leftover gets `{type:replaced}` so it stops retrying.
+ *                     Pin a single extension with BEAM_EXTENSION_ID.
  */
 'use strict';
 const http = require('http');
@@ -86,6 +89,32 @@ function wsSend(socket, data, opcode = 1) {
 function attachWs(socket) {
   let buf = Buffer.alloc(0);
   let frag = [];
+  let identified = false;
+  const helloTimer = setTimeout(() => {
+    if (!identified) socket.destroy();
+  }, 3000);
+
+  function onMessage(text) {
+    let msg;
+    try { msg = JSON.parse(text); } catch { return; }
+    if (!identified) {
+      if (msg.type !== 'hello') return;
+      identified = true;
+      clearTimeout(helloTimer);
+      adopt(socket, msg.info || {});
+      return;
+    }
+    if (msg.type === 'hello') {
+      if (socket === sock) { sockInfo = Object.assign(sockInfo || {}, msg.info || {}); alive = true; }
+      return;
+    }
+    if (msg.id && pending.has(msg.id) && socket === sock) {
+      const p = pending.get(msg.id);
+      pending.delete(msg.id);
+      clearTimeout(p.timer);
+      p.resolve(msg);
+    }
+  }
 
   socket.on('data', (chunk) => {
     buf = Buffer.concat([buf, chunk]);
@@ -121,16 +150,38 @@ function attachWs(socket) {
       if (opcode === 10) { if (socket === sock) alive = true; continue; }
       if (opcode === 0) {
         frag.push(payload);
-        if (fin) { handle(Buffer.concat(frag).toString('utf8')); frag = []; }
+        if (fin) { onMessage(Buffer.concat(frag).toString('utf8')); frag = []; }
         continue;
       }
       if (!fin) { frag = [payload]; continue; }
-      handle(payload.toString('utf8'));
+      onMessage(payload.toString('utf8'));
     }
   });
 
   socket.on('error', () => {});
-  socket.on('close', () => { if (sock === socket) drop('the extension closed the connection'); });
+  socket.on('close', () => {
+    clearTimeout(helloTimer);
+    if (sock === socket) drop('the extension closed the connection');
+  });
+}
+
+/* Last writer wins, so loading a new unpacked copy takes over. Same id is a
+   service-worker restart: silent replace. Different id is a leftover copy:
+   tell it, so it stops retrying and flapping the socket. Assign sock before
+   ending the old one — a sync 'close' would otherwise drop the new socket. */
+function adopt(socket, info) {
+  const newId = info.id || '';
+  const oldId = (sockInfo && sockInfo.id) || '';
+  const other = (sock && sock !== socket) ? sock : null;
+  sock = socket;
+  sockInfo = info;
+  alive = true;
+  if (other) {
+    if (newId !== oldId) {
+      try { wsSend(other, JSON.stringify({ type: 'replaced', by: newId || 'another extension' })); } catch (e) {}
+    }
+    try { other.end(); } catch (e) {}
+  }
 }
 
 /* A half-open socket — the browser was force-quit, the machine slept, the
@@ -147,18 +198,6 @@ function drop(why) {
     p.resolve({ ok: false, error: why + ': open the Beam panel in Chrome and press Reconnect' });
   }
   pending.clear();
-}
-
-function handle(text) {
-  let msg;
-  try { msg = JSON.parse(text); } catch { return; }
-  if (msg.type === 'hello') { sockInfo = msg.info || {}; alive = true; return; }
-  if (msg.id && pending.has(msg.id)) {
-    const p = pending.get(msg.id);
-    pending.delete(msg.id);
-    clearTimeout(p.timer);
-    p.resolve(msg);
-  }
 }
 
 function send(cmd, timeoutMs) {
@@ -220,8 +259,6 @@ server.on('upgrade', (req, socket) => {
     'Sec-WebSocket-Accept: ' + accept + '\r\n\r\n'
   );
   socket.setNoDelay(true);
-  if (sock) { try { sock.end(); } catch (e) {} }
-  sock = socket;
   attachWs(socket);
 });
 

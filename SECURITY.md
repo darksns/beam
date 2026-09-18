@@ -36,8 +36,10 @@ the extension over the socket and writes the answer back. It binds to
 A closed set of operations: `snap`, `outline`, `fields`, `text`, `html`,
 `click`, `fill`, `set`, `select`, `check`, `press`, `scroll`, `wait`, `upload`,
 `do`. There is no `eval`, no injection of arbitrary scripts, no way to ask the
-page to run code. `upload` puts bytes the service worker downloaded into an
-`input[type=file]`; it cannot read files from your disk.
+page to run code. TinyMCE and jQuery live in the page world: a small MAIN-world
+shim talks to them; the agent itself stays isolated. `upload` puts bytes the
+service worker downloaded into an `input[type=file]`; it cannot read files from
+your disk.
 
 ## Permissions
 

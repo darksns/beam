@@ -9,6 +9,7 @@ let connecting = false;
 let curTab = null;
 let curUrl = null;      // the tab's url as of the last command
 let retry = 0;
+let superseded = false; // another copy of the extension took the hub socket
 
 /* ------------------------------------------------------------ connection */
 
@@ -23,7 +24,7 @@ async function loadPort() {
 }
 
 async function connect() {
-  if (connecting) return;
+  if (superseded || connecting) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   connecting = true;
 
@@ -38,11 +39,21 @@ async function connect() {
   socket.onopen = () => {
     retry = 0;
     setBadge('on');
-    socket.send(JSON.stringify({ type: 'hello', info: { ua: navigator.userAgent } }));
+    socket.send(JSON.stringify({
+      type: 'hello',
+      info: { ua: navigator.userAgent, id: chrome.runtime.id, version: chrome.runtime.getManifest().version }
+    }));
   };
   socket.onmessage = async (ev) => {
     let cmd;
     try { cmd = JSON.parse(ev.data); } catch { return; }
+    if (cmd.type === 'replaced') {
+      superseded = true;
+      setBadge('dup');
+      try { socket.close(); } catch (e) {}
+      return;
+    }
+    if (!cmd.id) return;
     let out;
     try { out = { id: cmd.id, ok: true, result: await dispatch(cmd) }; }
     catch (e) { out = { id: cmd.id, ok: false, error: String(e && e.message || e) }; }
@@ -55,6 +66,7 @@ async function connect() {
   socket.onclose = () => {
     if (ws !== socket) return;
     ws = null;
+    if (superseded) { setBadge('dup'); return; }
     setBadge('off');
     schedule();
   };
@@ -62,15 +74,19 @@ async function connect() {
 }
 
 function schedule() {
+  if (superseded) return;
   retry = Math.min(retry + 1, 4);        // at most 2s between attempts
   setTimeout(connect, 500 * retry);
 }
 
 function setBadge(state) {
-  chrome.action.setBadgeText({ text: state === 'on' ? '' : '!' });
+  const text = state === 'on' ? '' : '!';
+  chrome.action.setBadgeText({ text });
   chrome.action.setBadgeBackgroundColor({ color: '#d93025' });
   chrome.action.setTitle({
-    title: state === 'on' ? 'Beam — connected' : 'Beam — disconnected, click for the panel'
+    title: state === 'on' ? 'Beam — connected'
+      : state === 'dup' ? 'Beam — another copy of the extension is connected'
+      : 'Beam — disconnected, click for the panel'
   });
 }
 
@@ -86,15 +102,17 @@ connect();
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === 'status') {
     (async () => {
+      await bindReady;
       let tabTitle = null, tabUrl = null;
       if (curTab) {
         try {
           const t = await chrome.tabs.get(curTab);
           tabTitle = t.title; tabUrl = t.url;
-        } catch (e) { curTab = null; curUrl = null; }
+        } catch (e) { await bind(null); }
       }
       reply({
         connected: !!ws && ws.readyState === WebSocket.OPEN,
+        superseded,
         port,
         version: chrome.runtime.getManifest().version,
         tab: curTab, tabTitle, tabUrl
@@ -102,12 +120,20 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     })();
     return true;
   }
-  if (msg.type === 'reconnect') { try { ws && ws.close(); } catch (e) {} ws = null; connect(); reply({ ok: true }); return; }
-  if (msg.type === 'unbind') { curTab = null; curUrl = null; reply({ ok: true }); return; }
+  if (msg.type === 'reconnect') {
+    superseded = false;
+    try { ws && ws.close(); } catch (e) {}
+    ws = null;
+    connect();
+    reply({ ok: true });
+    return;
+  }
+  if (msg.type === 'unbind') { bind(null).then(() => reply({ ok: true })); return true; }
   if (msg.type === 'setport') {
     (async () => {
       port = Number(msg.port) || DEFAULT_PORT;
       await chrome.storage.local.set({ port });
+      superseded = false;
       try { ws && ws.close(); } catch (e) {}
       ws = null;
       connect();
@@ -119,17 +145,51 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 
 /* ------------------------------------------------------------------- tab */
 
+/* Survives MV3 service-worker death. session, not local: a browser restart
+   should not write into yesterday's tab. */
+async function saveBind() {
+  try {
+    if (chrome.storage.session) await chrome.storage.session.set({ curTab, curUrl });
+  } catch (e) {}
+}
+
+const bindReady = (async () => {
+  try {
+    if (!chrome.storage.session) return;
+    const s = await chrome.storage.session.get(['curTab', 'curUrl']);
+    if (s.curTab != null) curTab = s.curTab;
+    if (s.curUrl != null) curUrl = s.curUrl;
+  } catch (e) {}
+})();
+
+async function bind(tab) {
+  if (tab) {
+    curTab = tab.id;
+    if (tab.url) curUrl = tab.url;
+  } else {
+    curTab = null;
+    curUrl = null;
+  }
+  await saveBind();
+}
+
+async function bindUrl(url) {
+  curUrl = url;
+  await saveBind();
+}
+
 async function targetTab(cmd) {
+  await bindReady;
   if (cmd.tab) {
     const t = await chrome.tabs.get(Number(cmd.tab));
     return t;
   }
   if (curTab) {
-    try { return await chrome.tabs.get(curTab); } catch (e) { curTab = null; }
+    try { return await chrome.tabs.get(curTab); } catch (e) { await bind(null); }
   }
   const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!t) throw new Error('no active tab');
-  curTab = t.id;
+  await bind(t);
   return t;
 }
 
@@ -148,11 +208,17 @@ function waitLoad(tabId, timeout = 20000) {
 const READ_OPS = ['info', 'snap', 'outline', 'fields', 'text', 'html'];
 const WRITE_OPS = ['click', 'fill', 'set', 'select', 'check', 'press', 'upload'];
 
+function isWrite(cmd) {
+  if (WRITE_OPS.indexOf(cmd.op) >= 0) return true;
+  if (cmd.op === 'do') return (cmd.steps || []).some(isWrite);
+  return false;
+}
+
 /* A tab can be reused by the person while Beam is working in it. Before
    writing, check the url is still the one the last command left behind: if it
    changed and Beam did not do it, stop. */
 function guardUrl(tab, cmd) {
-  if (WRITE_OPS.indexOf(cmd.op) < 0 || cmd.force) return;
+  if (!isWrite(cmd) || cmd.force) return;
   if (!curUrl || tab.id !== curTab) return;
   if (tab.url === curUrl) return;
   throw new Error(
@@ -185,6 +251,8 @@ async function page(tab, cmd) {
   else if (cmd.frame != null) target.frameIds = [Number(cmd.frame)];
 
   await chrome.scripting.executeScript({ target, files: ['agent.js'] });
+  try { await chrome.scripting.executeScript({ target, files: ['shim.js'], world: 'MAIN' }); }
+  catch (e) { /* some frames refuse MAIN-world injection; fills fall back to the DOM */ }
   const results = await chrome.scripting.executeScript({
     target,
     args: [cmd],
@@ -251,6 +319,7 @@ function extFor(mime) {
 /* -------------------------------------------------------------- commands */
 
 async function dispatch(cmd) {
+  await bindReady;
   switch (cmd.op) {
 
     case 'ping':
@@ -276,8 +345,7 @@ async function dispatch(cmd) {
 
     case 'use': {
       const t = await chrome.tabs.get(Number(cmd.tab));
-      curTab = t.id;
-      curUrl = t.url;
+      await bind(t);
       await chrome.tabs.update(t.id, { active: true });
       return { tab: t.id, url: t.url, title: t.title };
     }
@@ -290,17 +358,16 @@ async function dispatch(cmd) {
       } else {
         t = await chrome.tabs.create({ url: cmd.url, active: cmd.background !== true });
       }
-      curTab = t.id;
       await waitLoad(t.id);
       t = await chrome.tabs.get(t.id);
-      curUrl = t.url;
+      await bind(t);
       return { tab: t.id, url: t.url, title: t.title };
     }
 
     case 'close': {
       const t = await targetTab(cmd);
       await chrome.tabs.remove(t.id);
-      if (curTab === t.id) curTab = null;
+      if (curTab === t.id) await bind(null);
       return { closed: t.id };
     }
 
@@ -308,7 +375,7 @@ async function dispatch(cmd) {
       const t = await targetTab(cmd);
       await chrome.tabs.reload(t.id);
       await waitLoad(t.id);
-      curUrl = (await chrome.tabs.get(t.id)).url;
+      await bindUrl((await chrome.tabs.get(t.id)).url);
       return { url: curUrl };
     }
 
@@ -317,7 +384,7 @@ async function dispatch(cmd) {
       const t = await targetTab(cmd);
       await (cmd.op === 'back' ? chrome.tabs.goBack(t.id) : chrome.tabs.goForward(t.id));
       await waitLoad(t.id);
-      curUrl = (await chrome.tabs.get(t.id)).url;
+      await bindUrl((await chrome.tabs.get(t.id)).url);
       return { url: curUrl };
     }
 
@@ -350,6 +417,7 @@ async function dispatch(cmd) {
        not subject to the page's CORS. The bytes reach the agent as base64. */
     case 'upload': {
       const t = await targetTab(cmd);
+      guardUrl(t, cmd);
       const r = await fetch(cmd.url);
       if (!r.ok) throw new Error('download failed: HTTP ' + r.status + ' ' + cmd.url);
       const buf = new Uint8Array(await r.arrayBuffer());
@@ -372,8 +440,7 @@ async function dispatch(cmd) {
       const t = await targetTab(cmd);
       await chrome.tabs.update(t.id, { url: cmd.url });
       await waitLoad(t.id);
-      curTab = t.id;
-      curUrl = (await chrome.tabs.get(t.id)).url;
+      await bind(await chrome.tabs.get(t.id));
       return { url: curUrl };
     }
 
@@ -382,7 +449,7 @@ async function dispatch(cmd) {
       guardUrl(t, cmd);
       const r = await page(t, cmd);
       /* an action can navigate the page: realign the bookmark */
-      try { curUrl = (await chrome.tabs.get(t.id)).url; } catch (e) {}
+      try { await bindUrl((await chrome.tabs.get(t.id)).url); } catch (e) {}
       return r;
     }
   }

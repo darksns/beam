@@ -40,6 +40,8 @@ const html = `<!doctype html><html><head><title>Edit page · WP</title></head><b
   </div>
 
   <div contenteditable="true" id="rich" aria-label="Notes">rich text</div>
+  <input id="foo.bar" class="w-1/2 hover:bg-red" name="weird" value="1">
+  <textarea id="content" name="content">old visual</textarea>
   <a href="/wp-admin/edit.php">All pages</a>
   <button id="publish" type="button">Update</button>
 </form></body></html>`;
@@ -62,6 +64,7 @@ global.window = window;
 
 const code = fs.readFileSync(path.join(__dirname, '..', 'extension', 'agent.js'), 'utf8');
 window.eval(code);
+window.eval(fs.readFileSync(path.join(__dirname, '..', 'extension', 'shim.js'), 'utf8'));
 const B = window.__beam;
 
 let fail = 0;
@@ -218,6 +221,50 @@ t('outline shows the structure', () => {
   const r = B.run({ op: 'outline', depth: 3 });
   if (!/form#post/.test(r.structure)) throw new Error('form missing:\n' + r.structure);
   return r.structure.split('\n').length + ' lines';
+});
+
+t('cssPath escapes ids that are not identifiers', () => {
+  const f = B.run({ op: 'fields' }).fields.find((x) => x.name === 'weird');
+  if (!f) throw new Error('missing');
+  if (f.selector !== '#foo\\.bar') throw new Error('selector: ' + f.selector);
+  const hit = window.document.querySelector(f.selector);
+  if (hit !== window.document.getElementById('foo.bar')) throw new Error('selector does not round-trip');
+  return f.selector;
+});
+
+t('tinymce fill goes through the page shim', () => {
+  let visual = 'old visual';
+  window.tinymce = {
+    get(id) {
+      if (id !== 'content') return null;
+      return {
+        isHidden: () => false,
+        getContent: ({ format }) => format === 'text' ? visual.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : visual,
+        setContent: (html) => { visual = html; },
+        fire: () => {},
+        save: () => { window.document.getElementById('content').value = visual; }
+      };
+    }
+  };
+  const r = B.run({ op: 'fill', target: '#content', value: 'hello\n\nworld' });
+  if (r.via !== 'tinymce') throw new Error('via: ' + JSON.stringify(r));
+  if (!/<p>hello<\/p>/.test(visual) || !/<p>world<\/p>/.test(visual)) throw new Error('visual: ' + visual);
+  const f = B.run({ op: 'fields' }).fields.find((x) => x.id === 'content');
+  if (!/hello/.test(f.value)) throw new Error('fields missed the editor: ' + f.value);
+  delete window.tinymce;
+  return r.via;
+});
+
+t('jquery change is triggered via the shim', () => {
+  const hits = [];
+  window.jQuery = (el) => ({
+    data: () => undefined,
+    trigger: (ev) => hits.push(ev)
+  });
+  B.run({ op: 'fill', target: 'name=acf[field_aa]', value: 'JQ' });
+  delete window.jQuery;
+  if (hits.indexOf('change') < 0) throw new Error('hits: ' + hits.join(','));
+  return hits.join(',');
 });
 
 (async () => {
