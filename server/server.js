@@ -24,6 +24,7 @@ const EXT_ID = process.env.BEAM_EXTENSION_ID || '';
 
 let sock = null;            // the extension's socket
 let sockInfo = null;
+let alive = false;          // did this socket answer the last keepalive ping?
 const pending = new Map();  // id -> {resolve, timer}
 let seq = 0;
 
@@ -117,7 +118,7 @@ function attachWs(socket) {
 
       if (opcode === 8) { socket.end(); return; }
       if (opcode === 9) { wsSend(socket, payload, 10); continue; }
-      if (opcode === 10) continue;
+      if (opcode === 10) { if (socket === sock) alive = true; continue; }
       if (opcode === 0) {
         frag.push(payload);
         if (fin) { handle(Buffer.concat(frag).toString('utf8')); frag = []; }
@@ -129,13 +130,29 @@ function attachWs(socket) {
   });
 
   socket.on('error', () => {});
-  socket.on('close', () => { if (sock === socket) { sock = null; sockInfo = null; } });
+  socket.on('close', () => { if (sock === socket) drop('the extension closed the connection'); });
+}
+
+/* A half-open socket — the browser was force-quit, the machine slept, the
+   service worker died without a FIN — used to sit here forever, and every
+   command would wait out its full timeout. Now it is dropped and whatever was
+   in flight fails immediately, with an error that says what to do. */
+function drop(why) {
+  if (sock) { try { sock.destroy(); } catch (e) {} }
+  sock = null;
+  sockInfo = null;
+  alive = false;
+  for (const [id, p] of pending) {
+    clearTimeout(p.timer);
+    p.resolve({ ok: false, error: why + ': open the Beam panel in Chrome and press Reconnect' });
+  }
+  pending.clear();
 }
 
 function handle(text) {
   let msg;
   try { msg = JSON.parse(text); } catch { return; }
-  if (msg.type === 'hello') { sockInfo = msg.info || {}; return; }
+  if (msg.type === 'hello') { sockInfo = msg.info || {}; alive = true; return; }
   if (msg.id && pending.has(msg.id)) {
     const p = pending.get(msg.id);
     pending.delete(msg.id);
@@ -146,11 +163,13 @@ function handle(text) {
 
 function send(cmd, timeoutMs) {
   return new Promise((resolve) => {
+    if (sock && (sock.destroyed || !sock.writable)) drop('the connection to the extension died');
     if (!sock) return resolve({ ok: false, error: 'extension not connected: open Chrome and check that Beam is enabled in chrome://extensions' });
     const id = ++seq;
     const timer = setTimeout(() => {
       pending.delete(id);
-      resolve({ ok: false, error: 'timed out after ' + timeoutMs + 'ms' });
+      resolve({ ok: false, error: 'the extension is connected but did not answer within ' + timeoutMs +
+        'ms. If it keeps happening, check that only one copy of Beam is loaded in chrome://extensions' });
     }, timeoutMs);
     pending.set(id, { resolve, timer });
     try { wsSend(sock, JSON.stringify(Object.assign({}, cmd, { id }))); }
@@ -206,8 +225,15 @@ server.on('upgrade', (req, socket) => {
   attachWs(socket);
 });
 
-/* keepalive: every message resets the MV3 service worker idle timer */
-setInterval(() => { if (sock) { try { wsSend(sock, '', 9); } catch (e) {} } }, 15000);
+/* Keepalive, two jobs: every message resets the MV3 service worker idle timer,
+   and a ping that goes unanswered twice in a row means the socket is dead. */
+const PING_MS = Number(process.env.BEAM_PING_MS || 15000);
+setInterval(() => {
+  if (!sock) return;
+  if (!alive) return drop('the extension stopped answering');
+  alive = false;
+  try { wsSend(sock, '', 9); } catch (e) { drop('the connection to the extension died'); }
+}, PING_MS);
 
 server.listen(PORT, '127.0.0.1', () => {
   process.stdout.write('beam server on 127.0.0.1:' + PORT + '\n');

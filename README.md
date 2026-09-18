@@ -55,6 +55,10 @@ Then, once, in Chrome:
 
 Check it: `beam tabs`.
 
+Load **one** copy of the extension only: two of them (say a leftover folder and
+this repo) both dial the same port and take the socket from each other, which
+looks like random timeouts.
+
 The installer links `beam` and `beam-mdconv` into `~/.local/bin`, creates
 `~/.beam/` (hub token and site adapters) and, if Claude Code is installed, links
 the two skills into `~/.claude/skills/`. The hub starts by itself on every
@@ -120,6 +124,9 @@ by default — see [SECURITY.md](SECURITY.md) for the details.
   drive your browser through this port.**
 - The WebSocket only accepts an `Origin` of `chrome-extension://…`; set
   `BEAM_EXTENSION_ID` to pin one specific extension.
+- The hub pings the extension every 15s and drops a socket that stops
+  answering, so a dead service worker fails the next command immediately
+  instead of making it wait out its timeout.
 - Beam refuses to write if the bound tab was moved elsewhere by the person: it
   reports first, `--force` second.
 - The extension asks for `<all_urls>`, like any automation extension. To narrow

@@ -154,6 +154,47 @@ function beExtension(socket) {
       parsed.result ? parsed.result.data.length + ' bytes back' : r.body.slice(0, 80));
   }
 
+  /* a socket that stops answering must be dropped, not waited on: this is what
+     turned a dead service worker into a 30-second timeout on every command */
+  const PORT2 = PORT + 1;
+  const HOME2 = fs.mkdtempSync(path.join(os.tmpdir(), 'beam-test-'));
+  const hub2 = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'server.js')], {
+    env: Object.assign({}, process.env, { BEAM_PORT: String(PORT2), BEAM_HOME: HOME2, BEAM_PING_MS: '150' }),
+    stdio: 'ignore'
+  });
+  await sleep(600);
+  const token2 = fs.readFileSync(path.join(HOME2, 'token'), 'utf8').trim();
+  const mute = await new Promise((resolve) => {
+    const key = crypto.randomBytes(16).toString('base64');
+    const r = http.request({
+      host: '127.0.0.1', port: PORT2, path: '/',
+      headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': key,
+                 'Sec-WebSocket-Version': 13, Origin: FAKE_EXT }
+    });
+    r.on('upgrade', (res, socket) => resolve(socket));
+    r.on('error', () => resolve(null));
+    r.end();
+  });
+  /* it says hello, then never answers another frame — a half-open socket */
+  if (mute) mute.write(Buffer.from([0x81, 0x1e, ...Buffer.from('{"type":"hello","info":{"ua":"x"}}').subarray(0, 30)]));
+  await sleep(700);
+  const started = Date.now();
+  const dead = await new Promise((resolve) => {
+    const req = http.request({ host: '127.0.0.1', port: PORT2, path: '/cmd', method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-beam-token': token2 } },
+      (res) => { let b = ''; res.on('data', (c) => { b += c; }); res.on('end', () => resolve(b)); });
+    req.on('error', () => resolve(''));
+    req.end('{"op":"snap"}');
+  });
+  const took = Date.now() - started;
+  let parsedDead = {};
+  try { parsedDead = JSON.parse(dead); } catch (e) {}
+  ok('a silent socket is dropped instead of timing out',
+    parsedDead.ok === false && /not connected|stopped answering/.test(parsedDead.error || '') && took < 3000,
+    took + 'ms · ' + (parsedDead.error || dead).slice(0, 60));
+  try { hub2.kill(); } catch (e) {}
+  fs.rmSync(HOME2, { recursive: true, force: true });
+
   /* the real CLI against the real hub: the one path the unit tests cannot see */
   const cli = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'beam'), 'server'], {
     env: Object.assign({}, process.env, { BEAM_PORT: String(PORT), BEAM_HOME: HOME })

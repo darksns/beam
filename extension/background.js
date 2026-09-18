@@ -5,6 +5,7 @@ const DEFAULT_PORT = 8777;
 
 let port = DEFAULT_PORT;
 let ws = null;
+let connecting = false;
 let curTab = null;
 let curUrl = null;      // the tab's url as of the last command
 let retry = 0;
@@ -22,25 +23,42 @@ async function loadPort() {
 }
 
 async function connect() {
+  if (connecting) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  await loadPort();
-  try { ws = new WebSocket(`ws://127.0.0.1:${port}`); } catch (e) { return schedule(); }
+  connecting = true;
 
-  ws.onopen = () => {
+  let socket;
+  try {
+    await loadPort();
+    socket = new WebSocket(`ws://127.0.0.1:${port}`);
+  } catch (e) { connecting = false; return schedule(); }
+  ws = socket;
+  connecting = false;
+
+  socket.onopen = () => {
     retry = 0;
     setBadge('on');
-    ws.send(JSON.stringify({ type: 'hello', info: { ua: navigator.userAgent } }));
+    socket.send(JSON.stringify({ type: 'hello', info: { ua: navigator.userAgent } }));
   };
-  ws.onmessage = async (ev) => {
+  socket.onmessage = async (ev) => {
     let cmd;
     try { cmd = JSON.parse(ev.data); } catch { return; }
     let out;
     try { out = { id: cmd.id, ok: true, result: await dispatch(cmd) }; }
     catch (e) { out = { id: cmd.id, ok: false, error: String(e && e.message || e) }; }
-    try { ws.send(JSON.stringify(out)); } catch (e) {}
+    /* answer on the socket the command came in on: a reconnect in the middle
+       of a long command must not send the reply into the new one */
+    try { socket.send(JSON.stringify(out)); } catch (e) {}
   };
-  ws.onclose = () => { setBadge('off'); ws = null; schedule(); };
-  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  /* Only the socket that is still the current one may reset the state. An
+     older socket closing used to null a perfectly healthy connection. */
+  socket.onclose = () => {
+    if (ws !== socket) return;
+    ws = null;
+    setBadge('off');
+    schedule();
+  };
+  socket.onerror = () => { try { socket.close(); } catch (e) {} };
 }
 
 function schedule() {
