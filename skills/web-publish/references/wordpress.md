@@ -131,6 +131,21 @@ generate one payload per language using the same `name=` targets. Untranslatable
 fields (percentages, codes, shortcodes, proper nouns) stay as they are: list
 them explicitly to the user instead of translating them at random.
 
+## Beaver Builder / VamTam
+
+The module settings open from the wrench, and the wrench exists only while the
+pointer is over the module. It is a `<span title="… Settings">` inside the
+builder iframe, so `snap` does not list it.
+
+```bash
+beam frames
+beam hover --frame ID "css=.fl-module"
+beam click --frame ID "title=Heading Settings"   # panel opens in the parent frame
+beam snap
+```
+
+The Beam window already has layout. `beam focus` only if you were asked to look.
+
 ## Status and saving
 
 - `#save-post` = "Save draft" in the classic editor; `text=Save draft` in the

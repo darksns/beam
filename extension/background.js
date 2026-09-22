@@ -8,6 +8,8 @@ let ws = null;
 let connecting = false;
 let curTab = null;
 let curUrl = null;      // the tab's url as of the last command
+let beamWindow = null;  // the unfocused window Beam owns
+let beamTab = null;     // the one tab inside it, reused by every open
 let retry = 0;
 let superseded = false; // another copy of the extension took the hub socket
 
@@ -149,16 +151,18 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
    should not write into yesterday's tab. */
 async function saveBind() {
   try {
-    if (chrome.storage.session) await chrome.storage.session.set({ curTab, curUrl });
+    if (chrome.storage.session) await chrome.storage.session.set({ curTab, curUrl, beamWindow, beamTab });
   } catch (e) {}
 }
 
 const bindReady = (async () => {
   try {
     if (!chrome.storage.session) return;
-    const s = await chrome.storage.session.get(['curTab', 'curUrl']);
+    const s = await chrome.storage.session.get(['curTab', 'curUrl', 'beamWindow', 'beamTab']);
     if (s.curTab != null) curTab = s.curTab;
     if (s.curUrl != null) curUrl = s.curUrl;
+    if (s.beamWindow != null) beamWindow = s.beamWindow;
+    if (s.beamTab != null) beamTab = s.beamTab;
   } catch (e) {}
 })();
 
@@ -187,10 +191,89 @@ async function targetTab(cmd) {
   if (curTab) {
     try { return await chrome.tabs.get(curTab); } catch (e) { await bind(null); }
   }
-  const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!t) throw new Error('no active tab');
-  await bind(t);
-  return t;
+  throw new Error('niente tab agganciata: beam open <url> oppure beam use <id>');
+}
+
+async function focusedWindowId() {
+  try {
+    const w = await chrome.windows.getLastFocused();
+    return w && w.id;
+  } catch (e) { return null; }
+}
+
+/* macOS sometimes focuses a window we asked to create in the background.
+   Put the person back where they were. */
+async function keepUserFocus(prevId) {
+  if (prevId == null) return;
+  const now = await focusedWindowId();
+  if (now == null || now === prevId) return;
+  try { await chrome.windows.update(prevId, { focused: true }); } catch (e) {}
+}
+
+/* Make the tab the selected one in its own window. Never focuses the window.
+   Returns null when the tab is in the window the person is using and is not
+   the one they are looking at: switching it would take their screen. */
+async function selectWithoutFocus(tab) {
+  if (tab.active) return tab;
+  const prev = await focusedWindowId();
+  if (prev != null && tab.windowId === prev) return null;
+  await chrome.tabs.update(tab.id, { active: true });
+  const next = await chrome.tabs.get(tab.id);
+  await keepUserFocus(prev);
+  return next;
+}
+
+async function focusTab(tab) {
+  await chrome.windows.update(tab.windowId, { focused: true });
+  if (!tab.active) await chrome.tabs.update(tab.id, { active: true });
+  return chrome.tabs.get(tab.id);
+}
+
+/* Beam's own window: one tab, never focused unless --focus / beam focus.
+   A tab that is active in an unfocused window still has layout, which is
+   what hover and Beaver Builder need. */
+async function ensureBeamTab(url, opts) {
+  opts = opts || {};
+  const prev = await focusedWindowId();
+  let reused = false;
+  let tab = null;
+
+  if (beamTab && !opts.fresh) {
+    try { tab = await chrome.tabs.get(beamTab); }
+    catch (e) { tab = null; beamTab = null; beamWindow = null; }
+  }
+
+  if (tab) {
+    await chrome.tabs.update(tab.id, { url: url, active: true });
+    await waitLoad(tab.id);
+    tab = await chrome.tabs.get(tab.id);
+    reused = true;
+  } else if (opts.fresh && beamWindow) {
+    try {
+      await chrome.windows.get(beamWindow);
+      tab = await chrome.tabs.create({ windowId: beamWindow, url: url, active: true });
+      await waitLoad(tab.id);
+      tab = await chrome.tabs.get(tab.id);
+    } catch (e) { tab = null; beamWindow = null; }
+  }
+
+  if (!tab) {
+    const win = await chrome.windows.create({ url: url, focused: false, type: 'normal' });
+    tab = (win.tabs && win.tabs[0]) || (await chrome.tabs.query({ windowId: win.id }))[0];
+    await waitLoad(tab.id);
+    tab = await chrome.tabs.get(tab.id);
+  }
+
+  beamTab = tab.id;
+  beamWindow = tab.windowId;
+  await saveBind();
+
+  if (opts.focus) {
+    tab = await focusTab(tab);
+  } else {
+    await keepUserFocus(prev);
+  }
+  return { tab: tab, reused: reused };
 }
 
 function waitLoad(tabId, timeout = 20000) {
@@ -206,11 +289,17 @@ function waitLoad(tabId, timeout = 20000) {
 /* ----------------------------------------------------------------- inject */
 
 const READ_OPS = ['info', 'snap', 'outline', 'fields', 'text', 'html'];
-const WRITE_OPS = ['click', 'fill', 'set', 'select', 'check', 'press', 'upload'];
+const WRITE_OPS = ['click', 'hover', 'fill', 'set', 'select', 'check', 'press', 'upload'];
 
 function isWrite(cmd) {
   if (WRITE_OPS.indexOf(cmd.op) >= 0) return true;
   if (cmd.op === 'do') return (cmd.steps || []).some(isWrite);
+  return false;
+}
+
+function needsLayout(cmd) {
+  if (cmd.op === 'hover') return true;
+  if (cmd.op === 'do') return (cmd.steps || []).some(needsLayout);
   return false;
 }
 
@@ -233,6 +322,7 @@ function guardUrl(tab, cmd) {
 function tagFrame(out, fid) {
   if (!fid || !out || typeof out !== 'object') return out;
   if (typeof out.outline === 'string') out.outline = out.outline.replace(/@(\d+)\b/g, '@' + fid + ':$1');
+  if (typeof out.revealed === 'string') out.revealed = out.revealed.replace(/@(\d+)\b/g, '@' + fid + ':$1');
   if (Array.isArray(out.fields)) out.fields.forEach((f) => { f.ref = f.ref.replace(/^@/, '@' + fid + ':'); });
   return out;
 }
@@ -270,6 +360,10 @@ async function page(tab, cmd) {
       if (out.partial) err.message += ' — partial: ' + JSON.stringify(out.partial);
       throw err;
     }
+    /* @n from a named frame is useless on the next command unless it carries
+       the frame. snap --frame all already does this; hover's revealed refs
+       are the ones an agent clicks next. */
+    if (cmd.frame != null && cmd.op === 'hover') return tagFrame(out.r, cmd.frame);
     return out.r;
   }
 
@@ -338,36 +432,44 @@ async function dispatch(cmd) {
     case 'tabs': {
       const all = await chrome.tabs.query({});
       return all.map((t) => ({
-        tab: t.id, active: t.active, current: t.id === curTab,
+        tab: t.id, active: t.active, current: t.id === curTab, beam: t.id === beamTab,
+        window: t.windowId,
         title: t.title, url: t.url
       }));
+    }
+
+    case 'focus': {
+      const t = await focusTab(await targetTab(cmd));
+      return { tab: t.id, url: t.url, title: t.title, focused: true };
     }
 
     case 'use': {
       const t = await chrome.tabs.get(Number(cmd.tab));
       await bind(t);
-      await chrome.tabs.update(t.id, { active: true });
-      return { tab: t.id, url: t.url, title: t.title };
+      if (cmd.focus) await focusTab(t);
+      return { tab: t.id, url: t.url, title: t.title, focused: !!cmd.focus };
     }
 
     case 'open': {
-      let t;
-      if (cmd.newTab === false) {
-        t = await targetTab(cmd);
-        await chrome.tabs.update(t.id, { url: cmd.url });
-      } else {
-        t = await chrome.tabs.create({ url: cmd.url, active: cmd.background !== true });
-      }
-      await waitLoad(t.id);
-      t = await chrome.tabs.get(t.id);
-      await bind(t);
-      return { tab: t.id, url: t.url, title: t.title };
+      if (!cmd.url) throw new Error('missing url');
+      const got = await ensureBeamTab(cmd.url, { fresh: cmd.new === true, focus: cmd.focus === true });
+      await bind(got.tab);
+      return {
+        tab: got.tab.id, url: got.tab.url, title: got.tab.title,
+        window: got.tab.windowId, focused: cmd.focus === true, reused: got.reused
+      };
     }
 
     case 'close': {
       const t = await targetTab(cmd);
+      const wasBeam = t.id === beamTab;
       await chrome.tabs.remove(t.id);
       if (curTab === t.id) await bind(null);
+      if (wasBeam) {
+        beamTab = null;
+        beamWindow = null;
+        await saveBind();
+      }
       return { closed: t.id };
     }
 
@@ -406,10 +508,26 @@ async function dispatch(cmd) {
 
     case 'shot': {
       const t = await targetTab(cmd);
-      await chrome.tabs.update(t.id, { active: true });
-      const data = await chrome.tabs.captureVisibleTab(t.windowId, {
-        format: 'jpeg', quality: cmd.quality || 55
-      });
+      const prev = await focusedWindowId();
+      const selected = await selectWithoutFocus(t);
+      const shotOpts = { format: 'jpeg', quality: cmd.quality || 55 };
+      let data = '';
+      /* only capture once this tab is the one on screen in its window,
+         otherwise we would photograph whatever the person is looking at */
+      if (selected) {
+        try { data = await chrome.tabs.captureVisibleTab(selected.windowId, shotOpts); }
+        catch (e) { data = ''; }
+      }
+      if (!data || data.length < 200) {
+        await chrome.windows.update(t.windowId, { focused: true });
+        await chrome.tabs.update(t.id, { active: true });
+        try {
+          data = await chrome.tabs.captureVisibleTab(t.windowId, shotOpts);
+        } finally {
+          await keepUserFocus(prev);
+        }
+      }
+      if (!data) throw new Error('screenshot failed');
       return { dataUrl: data, bytes: data.length };
     }
 
@@ -447,6 +565,11 @@ async function dispatch(cmd) {
     default: {
       const t = await targetTab(cmd);
       guardUrl(t, cmd);
+      /* Layout needs the tab selected in its window, not the window focused.
+         In the person's own window, leave their tab alone. */
+      if (needsLayout(cmd)) {
+        try { await selectWithoutFocus(t); } catch (e) {}
+      }
       const r = await page(t, cmd);
       /* an action can navigate the page: realign the bookmark */
       try { await bindUrl((await chrome.tabs.get(t.id)).url); } catch (e) {}

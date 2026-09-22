@@ -83,8 +83,11 @@ beam set --dry @payload.json     # preview the diff
 beam set @payload.json
 ```
 
+`open` works in a separate Chrome window that stays unfocused, and reuses one
+tab. `beam focus` brings that window forward.
+
 Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `tabs` · `frames`
-Act: `open` · `nav` · `click` · `fill` · `select` · `check` · `press` · `upload` ·
+Act: `open` · `focus` · `nav` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
 `set` · `do` · `wait` · `scroll` · `shot`
 
 Targets are `@12` (a ref from the last snap), `@3:12` (ref 12 inside frame 3),
@@ -106,7 +109,7 @@ reads, and `skills/web-publish/` covers content work inside a CMS.
 | panel | `extension/popup.html` · `popup.js` | connection state and quick commands |
 
 The agent exposes a **closed** set of operations (snap, outline, fields, text,
-html, click, fill, set, select, check, press, scroll, wait, upload, do). There is
+html, click, hover, fill, set, select, check, press, scroll, wait, upload, do). There is
 no path to running arbitrary code in the page.
 
 **Adapters** in `~/.beam/adapters/<host>.json` are notes on how a given

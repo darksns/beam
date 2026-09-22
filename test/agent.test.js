@@ -267,6 +267,70 @@ t('jquery change is triggered via the shim', () => {
   return hits.join(',');
 });
 
+t('hover reveals a Beaver-style wrench and forces :hover', () => {
+  const style = window.document.createElement('style');
+  style.textContent = '.box .wrench{display:none}.box:hover .wrench{display:block}';
+  window.document.head.appendChild(style);
+  const box = window.document.createElement('div');
+  box.className = 'box';
+  box.id = 'mod';
+  box.innerHTML = '<span class="wrench" title="Hidden Wrench">x</span>';
+  window.document.body.appendChild(box);
+  box.getBoundingClientRect = () => ({ left: 10, top: 20, width: 100, height: 40, right: 110, bottom: 60, x: 10, y: 20 });
+
+  const seen = [];
+  box.addEventListener('mousemove', (e) => {
+    seen.push(['move', e.clientX, e.clientY, e.bubbles]);
+    if (window.document.querySelector('.fl-block-settings')) return;
+    const icon = window.document.createElement('span');
+    icon.className = 'fl-block-settings';
+    icon.title = 'Heading Settings';
+    window.document.body.appendChild(icon);
+  });
+  box.addEventListener('mouseover', (e) => {
+    seen.push(['over', e.relatedTarget && e.relatedTarget.tagName, e.bubbles]);
+  });
+
+  const r = B.run({ op: 'hover', target: 'css=#mod' });
+  if (!box.hasAttribute('data-beam-hover')) throw new Error('hover attribute missing');
+  if (!box.parentElement.hasAttribute('data-beam-hover')) throw new Error('ancestors not marked');
+  const move = seen.find((s) => s[0] === 'move');
+  if (!move || move[1] !== 60 || move[2] !== 40 || move[3] !== true) throw new Error('mousemove: ' + JSON.stringify(seen));
+  const over = seen.find((s) => s[0] === 'over');
+  if (!over || over[1] !== 'HTML' || over[2] !== true) throw new Error('mouseover: ' + JSON.stringify(seen));
+  const sheet = window.document.getElementById('beam-hover-css');
+  const css = sheet && Array.prototype.map.call(sheet.sheet.cssRules, (rule) => rule.cssText).join('\n');
+  if (!css || css.indexOf('[data-beam-hover]') < 0) throw new Error('hover css not rewritten: ' + css);
+  if (!/span "Heading Settings" \.fl-block-settings/.test(r.revealed)) throw new Error('wrench not revealed:\n' + r.revealed);
+  if (r.layout !== true) throw new Error('layout flag');
+
+  let hits = 0;
+  window.document.body.addEventListener('click', (e) => {
+    if (e.target.classList.contains('fl-block-settings')) hits++;
+  });
+  B.run({ op: 'click', target: 'title=Heading Settings' });
+  if (hits !== 1) throw new Error('title click hits: ' + hits);
+  B.run({ op: 'click', target: 'text=Heading Settings' });
+  if (hits !== 2) throw new Error('text click hits: ' + hits);
+
+  B.run({ op: 'hover', target: '#publish' });
+  if (box.hasAttribute('data-beam-hover')) throw new Error('hover attribute stuck on the previous element');
+  if (!window.document.getElementById('publish').hasAttribute('data-beam-hover')) throw new Error('not moved');
+  return r.count + ' revealed';
+});
+
+t('title= reaches a control that is still hidden', () => {
+  const hidden = window.document.createElement('span');
+  hidden.title = 'Secret Settings';
+  hidden.style.display = 'none';
+  window.document.body.appendChild(hidden);
+  let hits = 0;
+  hidden.addEventListener('click', () => hits++);
+  B.run({ op: 'click', target: 'title=Secret Settings' });
+  if (hits !== 1) throw new Error('hits: ' + hits);
+  return 'clicked hidden';
+});
+
 (async () => {
   const r = await B.run({ op: 'do', steps: [
     { op: 'fill', target: 'label=Kicker', value: 'one' },

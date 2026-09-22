@@ -17,9 +17,12 @@ so the next time is immediate.
 
 1. `beam ping` — if it answers `extension not connected`, ask the user to click
    the Beam icon in Chrome.
-2. `beam tabs` — look at what is already open and **bind the right tab** with
-   `beam use <id>`. Beam refuses to write if the tab changes from outside: that
-   is a guard, not an error to force past.
+2. `beam open <url>` for the screen you need. It lives in Beam's own window,
+   unfocused, and the same tab is reused — do not pass `--new` or `--focus`,
+   and do not close it when you are done. `beam use <id>` only when the person
+   already has the right tab open; it does not bring it forward. Beam refuses
+   to write if that tab changes from outside: that is a guard, not an error to
+   force past.
 3. Check the session: if a `beam snap` shows a login form, stop and ask the user
    to authenticate. Never enter credentials yourself.
 
@@ -122,7 +125,7 @@ not invent selectors "typical" of a platform you have not inspected — read it.
 
 | symptom | cause | what to do |
 |---|---|---|
-| everything reads `(hidden)` | the tab was never brought to the front | `beam use <id>`, or `--hidden` |
+| everything reads `(hidden)` | the tab is not the selected one of its window | Beam's window already is; on a tab of theirs, `beam focus` only if they asked, or read with `--hidden` |
 | the editor is missing from the snap | it is inside an iframe | `beam frames`, then `--frame <id>` |
 | I write into the field but the app ignores it | a framework listening for its own events | `beam fill` already fires them; if that is not enough, find the code editor |
 | `@n` refs stop resolving | the page or iframe was recreated | run `beam snap` again, or use `name=`/`css=` |

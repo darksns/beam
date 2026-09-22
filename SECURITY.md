@@ -34,7 +34,7 @@ the extension over the socket and writes the answer back. It binds to
 ## What the agent can do in a page
 
 A closed set of operations: `snap`, `outline`, `fields`, `text`, `html`,
-`click`, `fill`, `set`, `select`, `check`, `press`, `scroll`, `wait`, `upload`,
+`click`, `hover`, `fill`, `set`, `select`, `check`, `press`, `scroll`, `wait`, `upload`,
 `do`. There is no `eval`, no injection of arbitrary scripts, no way to ask the
 page to run code. TinyMCE and jQuery live in the page world: a small MAIN-world
 shim talks to them; the agent itself stays isolated. `upload` puts bytes the

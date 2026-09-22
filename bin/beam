@@ -22,7 +22,7 @@ function token() {
 
 /* value-less flags: otherwise they would swallow the argument that follows
    (e.g. `beam set --dry '{...}'`) */
-const BOOL = new Set(['json', 'dry', 'hidden', 'raw', 'background', 'stop', 'all', 'force']);
+const BOOL = new Set(['json', 'dry', 'hidden', 'raw', 'background', 'stop', 'all', 'force', 'focus', 'new']);
 
 const argv = process.argv.slice(2);
 const op = argv.shift();
@@ -49,9 +49,11 @@ const HELP = `beam — drive Chrome as text
     beam info | tabs | frames
 
   act
-    beam open <url> [--newTab false] [--background]
-    beam nav <url> | reload | back | forward | close | use <tab>
+    beam open <url> [--new] [--focus]   its own window, unfocused; reuses that tab
+    beam focus                          bring the Beam window forward
+    beam nav <url> | reload | back | forward | close | use <tab> [--focus]
     beam click <target>
+    beam hover <target>                 mouseover/mousemove at the element's center
     beam fill <target> <value>
     beam select <target> <value>
     beam check <target> [on|off]
@@ -63,7 +65,7 @@ const HELP = `beam — drive Chrome as text
     beam shot [--out file.jpg]          screenshot to a file (only when truly needed)
 
   target: @12 (ref from snap) · @3:12 (ref inside frame 3) · css=.klass · text=Update
-          label=Title · name=post_title
+          label=Title · name=post_title · title=Heading Settings
   global: --tab <id>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
 `;
 
@@ -125,7 +127,7 @@ function build() {
   switch (op) {
     case 'open': case 'nav': cmd.url = positional[0]; break;
     case 'use': cmd.tab = positional[0]; break;
-    case 'click': cmd.target = positional[0]; break;
+    case 'click': case 'hover': cmd.target = positional[0]; break;
     case 'fill': case 'select':
       cmd.target = positional[0];
       cmd.value = positional.slice(1).join(' ');
@@ -158,6 +160,11 @@ function render(op, r) {
   if (opts.json) return JSON.stringify(r, null, 2);
   if (r == null) return 'ok';
 
+  if (op === 'hover') {
+    const head = `hovered ${r.hovered} · ${r.x},${r.y}` +
+      (r.layout === false ? '\nno layout on this tab — `beam use` it and hover again' : '');
+    return [head, `${r.count} revealed`, '', r.revealed || ''].join('\n').trimEnd();
+  }
   if (op === 'snap') {
     return [`${r.title}`, `${r.url}`, `${r.elements} elements${r.truncated ? ' · ' + r.truncated : ''}`, '', r.outline].join('\n');
   }
@@ -165,7 +172,7 @@ function render(op, r) {
   if (op === 'text') return [`${r.title} · ${r.chars} characters`, '', r.text].join('\n');
   if (op === 'html') return r.html;
   if (op === 'tabs') {
-    return r.map((t) => `${t.current ? '*' : ' '} [${t.tab}] ${(t.title || '').slice(0, 60)}\n      ${t.url}`).join('\n');
+    return r.map((t) => `${t.current ? '*' : ' '} [${t.tab}]${t.beam ? ' beam' : ''} ${(t.title || '').slice(0, 60)}\n      ${t.url}`).join('\n');
   }
   if (op === 'fields') {
     const cut = (v) => {

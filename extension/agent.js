@@ -5,7 +5,7 @@
 (function () {
   'use strict';
   /* the version lets a newer agent replace one that is already injected */
-  var VERSION = 5;
+  var VERSION = 6;
   if (window.__beam && window.__beam.version === VERSION) return;
 
   var MAXREF = 1500;
@@ -146,6 +146,7 @@
     if ((m = s.match(/^text=([\s\S]+)$/))) return byText(m[1]);
     if ((m = s.match(/^label=([\s\S]+)$/))) return byLabel(m[1]);
     if ((m = s.match(/^name=([\s\S]+)$/))) return document.querySelector('[name="' + esc(m[1]) + '"]');
+    if ((m = s.match(/^title=([\s\S]+)$/))) return byTitle(m[1]);
     try { var el = document.querySelector(s); if (el) return el; } catch (e) {}
     return byText(s) || byLabel(s);
   }
@@ -156,12 +157,31 @@
     var exact = null, part = null;
     for (var i = 0; i < pool.length; i++) {
       var el = pool[i];
+      /* icon controls (Beaver Builder wrench) have no text, only a title */
       var s = clean(el.value || el.textContent, 200).toLowerCase();
+      if (!s) s = clean(el.getAttribute('title') || el.getAttribute('aria-label') || '', 200).toLowerCase();
       if (!s) continue;
       if (s === want) { if (!exact && visible(el)) exact = el; }
       else if (!part && s.indexOf(want) > -1 && s.length < want.length + 40 && visible(el)) part = el;
     }
     return exact || part;
+  }
+
+  /* title= stays usable when the control is still display:none — a click fires anyway */
+  function byTitle(t) {
+    var want = t.toLowerCase().trim();
+    var pool = document.querySelectorAll('[title]');
+    var hidden = null, part = null;
+    for (var i = 0; i < pool.length; i++) {
+      var el = pool[i];
+      var s = clean(el.getAttribute('title'), 200).toLowerCase();
+      if (!s) continue;
+      if (s === want) {
+        if (visible(el)) return el;
+        if (!hidden) hidden = el;
+      } else if (!part && s.indexOf(want) > -1 && s.length < want.length + 40 && visible(el)) part = el;
+    }
+    return hidden || part;
   }
 
   function byLabel(t) {
@@ -194,6 +214,7 @@
     if (tag === 'input') return 'input:' + (el.type || 'text');
     if (tag === 'a') return 'link';
     if (tag === 'button' || el.getAttribute('role') === 'button') return 'button';
+    if (tag === 'textarea' || tag === 'select') return tag;
     if (editable(el)) return 'editable';
     return tag;
   }
@@ -350,7 +371,9 @@
     var el = need(target);
     var tag = el.tagName.toLowerCase();
 
-    if (editable(el)) {
+    /* a form control keeps its own value even when something stuck
+       contenteditable on it (WordPress does this to wp-editor-area) */
+    if (editable(el) && !/^(textarea|input|select)$/.test(tag)) {
       el.focus();
       el.textContent = String(value);
       fireAll(el, ['input', 'change', 'blur']);
@@ -395,6 +418,186 @@
     if (el.checked !== on && typeof el.click === 'function') el.click();
     if (el.checked !== on) { el.checked = on; fireAll(el, ['input', 'change']); }
     return { checked: el.checked };
+  }
+
+  /* A synthetic event never puts the pointer in :hover, and Beaver Builder
+     (VamTam uses it) does not keep the wrench in the DOM: the overlay is built
+     on mousemove, and only if clientX/clientY land inside the node — a
+     coordinateless event is treated as "outside" and the overlay is removed
+     on the same bubble. So: real coordinates, plus a copy of every :hover
+     rule keyed off [data-beam-hover] for stylesheets that show the control
+     with CSS alone. */
+  function pointOf(el) {
+    var r = null;
+    try { r = el.getBoundingClientRect(); } catch (e) {}
+    if (!r || (!r.width && !r.height)) return { x: 1, y: 1, layout: false };
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, layout: true };
+  }
+
+  function mouseEvt(type, x, y, related) {
+    var enter = type === 'mouseenter' || type === 'pointerenter';
+    var PE = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+    var Ctor = type.indexOf('pointer') === 0 ? PE : MouseEvent;
+    var init = {
+      bubbles: !enter,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      screenX: x,
+      screenY: y,
+      relatedTarget: related || null,
+      button: 0,
+      buttons: 0
+    };
+    if (Ctor !== MouseEvent) {
+      init.pointerId = 1;
+      init.pointerType = 'mouse';
+      init.isPrimary = true;
+    }
+    try { return new Ctor(type, init); }
+    catch (e) { return new MouseEvent(type, init); }
+  }
+
+  function markHover(el) {
+    var prev = document.querySelectorAll('[data-beam-hover]');
+    for (var i = 0; i < prev.length; i++) prev[i].removeAttribute('data-beam-hover');
+    var cur = el;
+    while (cur && cur.nodeType === 1) {
+      cur.setAttribute('data-beam-hover', '');
+      cur = cur.parentElement;
+    }
+  }
+
+  function harvestHover(rules, out, depth) {
+    if (!rules || depth > 8) return;
+    for (var i = 0; i < rules.length; i++) {
+      var rule = rules[i];
+      if (rule.selectorText && rule.selectorText.indexOf(':hover') !== -1 && rule.style) {
+        var sel = rule.selectorText.replace(/:hover/g, '[data-beam-hover]');
+        var css = rule.style.cssText;
+        if (sel !== rule.selectorText && css) out.push(sel + '{' + css + '}');
+      }
+      if (rule.styleSheet) {
+        try { harvestHover(rule.styleSheet.cssRules, out, depth + 1); } catch (e) {}
+      } else if (rule.cssRules && !rule.selectorText) {
+        var inner = [];
+        harvestHover(rule.cssRules, inner, depth + 1);
+        if (!inner.length) continue;
+        if (rule.conditionText && rule.type === 4) out.push('@media ' + rule.conditionText + '{' + inner.join('') + '}');
+        else if (rule.conditionText && rule.type === 12) out.push('@supports ' + rule.conditionText + '{' + inner.join('') + '}');
+        else out.push(inner.join(''));
+      }
+    }
+  }
+
+  function forceCssHover() {
+    var found = [];
+    var sheets = [];
+    try { sheets = Array.prototype.slice.call(document.styleSheets || []); } catch (e) {}
+    if (document.adoptedStyleSheets && document.adoptedStyleSheets.length) {
+      sheets = sheets.concat(Array.prototype.slice.call(document.adoptedStyleSheets));
+    }
+    for (var i = 0; i < sheets.length; i++) {
+      var sheet = sheets[i];
+      if (sheet.ownerNode && sheet.ownerNode.id === 'beam-hover-css') continue;
+      try { harvestHover(sheet.cssRules, found, 0); } catch (e) {}
+    }
+    var style = document.getElementById('beam-hover-css');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'beam-hover-css';
+      (document.head || document.documentElement).appendChild(style);
+    }
+    var ss = style.sheet;
+    if (!ss) return found.length;
+    while (ss.cssRules.length) ss.deleteRule(0);
+    var n = 0;
+    for (var j = 0; j < found.length && n < 1500; j++) {
+      try { ss.insertRule(found[j], ss.cssRules.length); n++; } catch (e2) {}
+    }
+    return n;
+  }
+
+  var REVEALED = INTERACTIVE + ',[title],[aria-label],.fl-block-settings,.fl-block-remove,.fl-block-copy,.fl-block-move';
+
+  function hover(target) {
+    var el = need(target);
+    if (typeof el.scrollIntoView === 'function') {
+      try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+    }
+    var before = new Set();
+    var beforeVis = new Map();
+    var prior = document.querySelectorAll(REVEALED);
+    for (var i = 0; i < prior.length; i++) {
+      before.add(prior[i]);
+      beforeVis.set(prior[i], visible(prior[i]));
+    }
+
+    markHover(el);
+    forceCssHover();
+    var pt = pointOf(el);
+    var related = document.documentElement && document.documentElement !== el && !el.contains(document.documentElement)
+      ? document.documentElement : null;
+    ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove'].forEach(function (type) {
+      el.dispatchEvent(mouseEvt(type, pt.x, pt.y, related));
+    });
+
+    /* BB 2.11+ puts the overlay in a popover. If the builder's own showPopover
+       threw (the handler aborts, the node is already in the DOM), open it.
+       manual popovers do not need a user gesture. */
+    var pops = document.querySelectorAll('.fl-block-overlay[popover]');
+    for (var p = 0; p < pops.length; p++) {
+      try {
+        if (typeof pops[p].showPopover !== 'function') continue;
+        var open = false;
+        try { open = pops[p].matches(':popover-open'); } catch (e2) {}
+        if (!open) pops[p].showPopover();
+      } catch (e3) {}
+    }
+
+    var found = [];
+    var after = document.querySelectorAll(REVEALED);
+    for (var k = 0; k < after.length; k++) {
+      var node = after[k];
+      if (node === el) continue;
+      var tag = node.tagName;
+      if (/^(SCRIPT|STYLE|LINK|META|HTML|BODY)$/.test(tag)) continue;
+      var now = visible(node);
+      var isNew = !before.has(node);
+      var became = before.has(node) && !beforeVis.get(node) && now;
+      if (isNew || became) found.push(node);
+    }
+    found.sort(function (a, b) {
+      function rank(n) {
+        var c = typeof n.className === 'string' ? n.className : '';
+        if (/settings/.test(c)) return 0;
+        if (/fl-block-|overlay/.test(c)) return 1;
+        return 2;
+      }
+      return rank(a) - rank(b);
+    });
+    if (found.length > 40) found = found.slice(0, 40);
+
+    var lines = found.map(function (node) {
+      var name = clean(node.getAttribute('title') || node.getAttribute('aria-label') || node.textContent, 70);
+      var line = '@' + ref(node) + ' ' + ctlKind(node);
+      if (name) line += ' "' + name + '"';
+      var c = typeof node.className === 'string' ? node.className : '';
+      var hit = c.split(/\s+/).filter(function (x) { return /settings|fl-block-/.test(x); }).slice(0, 2);
+      if (hit.length) line += ' .' + hit.join('.');
+      if (!visible(node)) line += ' (hidden)';
+      return line;
+    });
+
+    return {
+      hovered: clean(el.getAttribute('title') || el.getAttribute('aria-label') || el.textContent || el.tagName, 60),
+      x: Math.round(pt.x),
+      y: Math.round(pt.y),
+      layout: pt.layout,
+      count: lines.length,
+      revealed: lines.join('\n')
+    };
   }
 
   function click(target) {
@@ -505,6 +708,7 @@
     info: function () { return { url: location.href, title: document.title, ready: document.readyState }; },
     snap: snap, outline: outline, fields: fields, text: text, html: html,
     click: function (c) { return click(c.target); },
+    hover: function (c) { return hover(c.target); },
     fill: function (c) { return fill(c.target, c.value); },
     set: function (c) { return setMany(c.map || {}, !!c.dry); },
     select: function (c) { return select(c.target, c.value); },
