@@ -45,11 +45,22 @@ repo ships two skills — but the CLI is plain Node and works on its own.
 
 ## Install
 
+From npm:
+
+```bash
+npm install -g beam-chrome
+bash "$(npm root -g)/beam-chrome/install.sh"
+```
+
+or from a clone:
+
 ```bash
 git clone https://github.com/darksns/beam.git
 cd beam
 bash install.sh
 ```
+
+The installer prints the path of the `extension/` folder to load.
 
 Then, once, in Chrome:
 
@@ -160,6 +171,12 @@ and jQuery through the page shim.
 the handshake, WebSocket framing up to 200 KB payloads, that an unauthorized
 or page-originated request is refused, that a leftover copy is told it was
 replaced, and that a silent socket is dropped instead of timing out.
+
+## Contributing
+
+Issues, site adapters and pull requests are welcome — start from
+[CONTRIBUTING.md](CONTRIBUTING.md). Questions and ideas go in
+[Discussions](https://github.com/darksns/beam/discussions).
 
 ## License
 

@@ -3,6 +3,15 @@
   "version": "1.4.1",
   "description": "Drive Chrome as text from the terminal: read a page's structure, fill forms, click, navigate. Built for CLI agents.",
   "license": "MIT",
+  "author": "darksns",
+  "homepage": "https://github.com/darksns/beam#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/darksns/beam.git"
+  },
+  "bugs": {
+    "url": "https://github.com/darksns/beam/issues"
+  },
   "bin": {
     "beam": "bin/beam",
     "beam-mdconv": "bin/beam-mdconv"
@@ -14,7 +23,25 @@
   "devDependencies": {
     "jsdom": "^26.0.0"
   },
-  "engines": { "node": ">=18" },
-  "files": ["bin", "server", "extension", "skills", "install.sh"],
-  "keywords": ["chrome", "extension", "automation", "cli", "claude", "agent", "wordpress"]
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "server",
+    "extension",
+    "skills",
+    "install.sh",
+    "SECURITY.md",
+    "PRIVACY.md"
+  ],
+  "keywords": [
+    "chrome",
+    "extension",
+    "automation",
+    "cli",
+    "claude",
+    "agent",
+    "wordpress"
+  ]
 }

@@ -1,0 +1,31 @@
+name: Bug report
+description: Something does not work as described
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and what came back. Paste the output as text.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: page
+    attributes:
+      label: The page
+      description: Which site or admin panel (WordPress + ACF, Shopify…)? If you can, a minimal HTML snippet that reproduces it. Remove private data.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `beam ping`, plus Chrome and Node versions, and your OS.
+      placeholder: "beam 1.4.1 · Chrome 140 · Node 22 · macOS 15"
+    validations:
+      required: true

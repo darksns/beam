@@ -1,0 +1,23 @@
+name: Feature request
+description: A command, an option, or a site Beam should handle better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What were you trying to do, and where did Beam get in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+      description: The command or output you have in mind, if any.
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Checks
+      options:
+        - label: It does not need running arbitrary code in the page (Beam keeps a closed set of operations).
+          required: true

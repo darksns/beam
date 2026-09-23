@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/darksns/beam/discussions
+    about: Ask how to drive a site, share an adapter, or discuss an idea.
+  - name: Security vulnerability
+    url: https://github.com/darksns/beam/security/advisories/new
+    about: Report something exploitable privately.
