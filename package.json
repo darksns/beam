@@ -1,6 +1,6 @@
 {
   "name": "beam-chrome",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Drive Chrome as text from the terminal: read a page's structure, fill forms, click, navigate. Built for CLI agents.",
   "license": "MIT",
   "bin": {
