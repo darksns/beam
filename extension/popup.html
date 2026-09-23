@@ -40,12 +40,25 @@
   }
   footer { display: flex; gap: 8px; padding: 12px 14px 14px; }
   button {
-    flex: 1; font: inherit; font-size: 12px; padding: 7px 10px; cursor: pointer;
+    font: inherit; font-size: 12px; padding: 7px 10px; cursor: pointer;
     border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--fg);
   }
+  footer button { flex: 1; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button:hover { filter: brightness(1.06); }
   .hint { padding: 0 14px 12px; font-size: 11px; color: var(--muted); }
+  details { margin: 0 14px 14px; }
+  summary { font-size: 11px; color: var(--muted); cursor: pointer; user-select: none; }
+  summary:hover { color: var(--fg); }
+  #debug-out {
+    margin: 8px 0 0; padding: 8px; max-height: 160px; overflow: auto;
+    border: 1px solid var(--line); border-radius: 7px;
+    background: color-mix(in srgb, var(--fg) 4%, transparent);
+    font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap; user-select: text;
+  }
+  details button { margin-top: 8px; width: 100%; }
+  body:has(#debug[open]) { width: 380px; }
 </style>
 </head>
 <body>
@@ -77,6 +90,12 @@
   </footer>
 
   <p class="hint" id="hint"></p>
+
+  <details id="debug">
+    <summary>Debug — copy this if it will not connect</summary>
+    <button type="button" id="copy">Copy</button>
+    <pre id="debug-out"></pre>
+  </details>
 
   <script src="popup.js"></script>
 </body>

@@ -13,6 +13,68 @@ let beamTab = null;     // the one tab inside it, reused by every open
 let retry = 0;
 let superseded = false; // another copy of the extension took the hub socket
 
+/* Ring of connection events. Session, not memory: the service worker dies and
+   takes `ws` with it, and the next one would otherwise have nothing to show. */
+const LOG_MAX = 60;
+let dbgLog = [];
+let workerStarts = 0;
+let workerAt = 0;
+let lastOpenAt = 0;
+let helloSentAt = 0;
+let lastClose = null;
+let dbgQueued = false;
+let debugRestored = false;
+
+function note(event, extra) {
+  /* A note that arrives while the previous worker's log is still loading would
+     be wiped by the restore. Queue it until that restore has landed. */
+  if (!debugRestored) {
+    debugReady.then(() => note(event, extra));
+    return;
+  }
+  const row = Object.assign({ t: Date.now(), event }, extra || {});
+  dbgLog.push(row);
+  if (dbgLog.length > LOG_MAX) dbgLog.splice(0, dbgLog.length - LOG_MAX);
+  if (dbgQueued || !chrome.storage.session) return;
+  dbgQueued = true;
+  setTimeout(() => {
+    dbgQueued = false;
+    chrome.storage.session.set({
+      beamDebug: { log: dbgLog, workerStarts, workerAt, lastOpenAt, helloSentAt, lastClose }
+    }).catch(() => {});
+  }, 0);
+}
+
+const debugReady = (async () => {
+  let prevAt = 0;
+  try {
+    if (chrome.storage.session) {
+      const s = await chrome.storage.session.get('beamDebug');
+      const d = s && s.beamDebug;
+      if (d) {
+        if (Array.isArray(d.log)) dbgLog = d.log;
+        workerStarts = d.workerStarts || 0;
+        prevAt = d.workerAt || 0;
+        lastOpenAt = d.lastOpenAt || 0;
+        helloSentAt = d.helloSentAt || 0;
+        lastClose = d.lastClose || null;
+      }
+    }
+  } catch (e) {}
+  workerStarts += 1;
+  workerAt = Date.now();
+  debugRestored = true;
+  note('worker', { n: workerStarts, gap: prevAt ? workerAt - prevAt : 0 });
+})();
+
+function noteSkip(why) {
+  debugReady.then(() => {
+    const last = dbgLog[dbgLog.length - 1];
+    if (last && last.event === 'skip' && last.why === why) return;
+    note('skip', { why });
+  });
+}
+
 /* ------------------------------------------------------------ connection */
 
 /* The hub reads BEAM_PORT; the extension cannot, so the port is stored here
@@ -26,31 +88,52 @@ async function loadPort() {
 }
 
 async function connect() {
-  if (superseded || connecting) return;
+  if (superseded) { noteSkip('superseded'); return; }
+  if (connecting) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   connecting = true;
 
   let socket;
+  let openedAt = 0;
   try {
+    await debugReady;
+    if (superseded) { connecting = false; noteSkip('superseded'); return; }
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      connecting = false;
+      return;
+    }
     await loadPort();
+    note('connect', { port });
     socket = new WebSocket(`ws://127.0.0.1:${port}`);
-  } catch (e) { connecting = false; return schedule(); }
+  } catch (e) {
+    connecting = false;
+    note('fail', { error: String(e && e.message || e) });
+    return schedule();
+  }
   ws = socket;
   connecting = false;
 
   socket.onopen = () => {
     retry = 0;
+    openedAt = lastOpenAt = Date.now();
     setBadge('on');
-    socket.send(JSON.stringify({
-      type: 'hello',
-      info: { ua: navigator.userAgent, id: chrome.runtime.id, version: chrome.runtime.getManifest().version }
-    }));
+    try {
+      socket.send(JSON.stringify({
+        type: 'hello',
+        info: { ua: navigator.userAgent, id: chrome.runtime.id, version: chrome.runtime.getManifest().version }
+      }));
+      helloSentAt = Date.now();
+      note('open', { hello: true });
+    } catch (e) {
+      note('open', { hello: false, error: String(e && e.message || e) });
+    }
   };
   socket.onmessage = async (ev) => {
     let cmd;
     try { cmd = JSON.parse(ev.data); } catch { return; }
     if (cmd.type === 'replaced') {
       superseded = true;
+      note('replaced', { by: cmd.by || '' });
       setBadge('dup');
       try { socket.close(); } catch (e) {}
       return;
@@ -61,24 +144,39 @@ async function connect() {
     catch (e) { out = { id: cmd.id, ok: false, error: String(e && e.message || e) }; }
     /* answer on the socket the command came in on: a reconnect in the middle
        of a long command must not send the reply into the new one */
-    try { socket.send(JSON.stringify(out)); } catch (e) {}
+    try { socket.send(JSON.stringify(out)); }
+    catch (e) { note('send-fail', { error: String(e && e.message || e) }); }
   };
   /* Only the socket that is still the current one may reset the state. An
      older socket closing used to null a perfectly healthy connection. */
-  socket.onclose = () => {
-    if (ws !== socket) return;
+  socket.onclose = (ev) => {
+    const current = ws === socket;
+    note('close', {
+      code: ev.code,
+      clean: !!ev.wasClean,
+      opened: !!openedAt,
+      ms: openedAt ? Date.now() - openedAt : 0,
+      current
+    });
+    if (!current) return;
+    lastClose = { code: ev.code, at: Date.now(), opened: !!openedAt, clean: !!ev.wasClean };
     ws = null;
     if (superseded) { setBadge('dup'); return; }
     setBadge('off');
     schedule();
   };
-  socket.onerror = () => { try { socket.close(); } catch (e) {} };
+  socket.onerror = () => {
+    note('error', { opened: !!openedAt });
+    try { socket.close(); } catch (e) {}
+  };
 }
 
 function schedule() {
   if (superseded) return;
   retry = Math.min(retry + 1, 4);        // at most 2s between attempts
-  setTimeout(connect, 500 * retry);
+  const wait = 500 * retry;
+  note('retry', { n: retry, wait });
+  setTimeout(connect, wait);
 }
 
 function setBadge(state) {
@@ -112,18 +210,33 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
           tabTitle = t.title; tabUrl = t.url;
         } catch (e) { await bind(null); }
       }
+      await debugReady;
       reply({
         connected: !!ws && ws.readyState === WebSocket.OPEN,
         superseded,
         port,
         version: chrome.runtime.getManifest().version,
-        tab: curTab, tabTitle, tabUrl
+        tab: curTab, tabTitle, tabUrl,
+        debug: {
+          id: chrome.runtime.id,
+          ua: navigator.userAgent,
+          readyState: ws ? ws.readyState : null,
+          connecting,
+          retry,
+          workerStarts,
+          workerAt,
+          lastOpenAt,
+          helloSentAt,
+          lastClose,
+          log: dbgLog
+        }
       });
     })();
     return true;
   }
   if (msg.type === 'reconnect') {
     superseded = false;
+    note('reconnect');
     try { ws && ws.close(); } catch (e) {}
     ws = null;
     connect();
@@ -135,6 +248,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     (async () => {
       port = Number(msg.port) || DEFAULT_PORT;
       await chrome.storage.local.set({ port });
+      note('setport', { port });
       superseded = false;
       try { ws && ws.close(); } catch (e) {}
       ws = null;
