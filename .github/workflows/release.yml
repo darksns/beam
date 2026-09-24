@@ -1,0 +1,39 @@
+name: release
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Check versions match the tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          EXT=$(node -p "require('./extension/manifest.json').version")
+          echo "tag=$TAG package.json=$PKG manifest.json=$EXT"
+          if [ "$TAG" != "$PKG" ] || [ "$TAG" != "$EXT" ]; then
+            echo "::error::version mismatch: tag $TAG, package.json $PKG, manifest.json $EXT"
+            exit 1
+          fi
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      # trusted publishing (OIDC) needs npm >= 11.5.1; no token required
+      - run: npm install -g npm@latest
+      - run: npm publish --provenance --access public
+      - name: Zip the extension
+        run: cd extension && zip -r "../beam-extension-${GITHUB_REF_NAME}.zip" .
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" "beam-extension-${GITHUB_REF_NAME}.zip" --title "Beam ${GITHUB_REF_NAME#v}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
