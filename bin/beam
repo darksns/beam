@@ -6,6 +6,8 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const pkg = require(path.join(__dirname, '..', 'package.json'));
+const VERSION = pkg.version;
 
 const PORT = Number(process.env.BEAM_PORT || 8777);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -67,9 +69,11 @@ const HELP = `beam — drive Chrome as text
   target: @12 (ref from snap) · @3:12 (ref inside frame 3) · css=.klass · text=Update
           label=Title · name=post_title · title=Heading Settings
   global: --tab <id>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
+  beam --version | -v   print the CLI version
 `;
 
 if (!op || op === 'help' || op === '--help' || op === '-h') { process.stdout.write(HELP); process.exit(0); }
+if (op === '--version' || op === '-v') { process.stdout.write(VERSION + '\n'); process.exit(0); }
 
 /* -------------------------------------------------------------- server */
 
