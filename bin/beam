@@ -24,7 +24,7 @@ function token() {
 
 /* value-less flags: otherwise they would swallow the argument that follows
    (e.g. `beam set --dry '{...}'`) */
-const BOOL = new Set(['json', 'dry', 'hidden', 'raw', 'background', 'stop', 'all', 'force', 'focus', 'new']);
+const BOOL = new Set(['json', 'dry', 'hidden', 'raw', 'background', 'stop', 'all', 'force', 'focus', 'new', 'failed', 'clear']);
 
 const argv = process.argv.slice(2);
 const op = argv.shift();
@@ -49,6 +49,8 @@ const HELP = `beam — drive Chrome as text
     beam text    [--sel CSS] [--max N] [--from N]   readable text
     beam html    [--sel CSS] [--max N]              raw HTML
     beam info | tabs | frames
+    beam network [filter] [--type xhr,doc,js,css,img] [--method M] [--failed] [--last N] [--clear]
+                                                    requests of the bound tab (no bodies)
 
   act
     beam open <url> [--new] [--focus]   its own window, unfocused; reuses that tab
@@ -148,6 +150,9 @@ function build() {
       cmd.steps = Array.isArray(parsed) ? parsed : parsed.steps;
       break;
     }
+    case 'network':
+      if (positional[0] && !opts.filter) cmd.filter = positional[0];
+      break;
     case 'text': case 'html': case 'snap': case 'outline': case 'fields':
       if (positional[0] && !opts.sel) cmd.sel = positional[0];
       break;
@@ -191,6 +196,16 @@ function render(op, r) {
   }
   if (op === 'frames') {
     return r.map((f) => `[${f.frame}]${f.injectable ? '' : ' (not injectable)'} ${f.title || ''}\n     ${f.url}`).join('\n');
+  }
+  if (op === 'network') {
+    const head = `${r.count} of ${r.total} requests · tab ${r.tab}${r.cleared ? ' · cleared' : ''}`;
+    return [head, ''].concat(r.requests.map((q) => {
+      const st = q.error ? '✗' : q.status == null ? '…' : String(q.status);
+      const type = q.type === 'xmlhttprequest' ? 'xhr' : q.type === 'main_frame' ? 'doc' : q.type;
+      const ms = q.ms == null ? '' : q.ms + 'ms';
+      return `${st.padEnd(3)} ${q.method.padEnd(6)} ${type.padEnd(10)} ${ms.padStart(7)}${q.cache ? ' cache' : ''}  ${q.url}` +
+        (q.error ? `\n    ${q.error}` : '');
+    })).join('\n').trimEnd();
   }
   if (op === 'upload') return `${r.uploaded} · ${Math.round(r.bytes / 1024)} KB · ${r.type}`;
   if (op === 'do') {

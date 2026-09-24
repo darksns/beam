@@ -400,6 +400,131 @@ function waitLoad(tabId, timeout = 20000) {
   });
 }
 
+/* ---------------------------------------------------------------- network */
+
+/* Observe-only log of the requests made by the tabs Beam drives (the bound
+   one and its own). No bodies, no request headers: method, url, type, status,
+   timing, content-type. Kept in session storage, because the worker dies
+   between commands and would otherwise forget everything. */
+const NET_MAX = 500;
+const NET_URL_MAX = 2000;
+let net = {};            // tabId -> rows, oldest first
+let netQueued = false;
+
+const netReady = (async () => {
+  try {
+    if (!chrome.storage.session) return;
+    const s = await chrome.storage.session.get('beamNet');
+    if (s && s.beamNet && typeof s.beamNet === 'object') net = s.beamNet;
+  } catch (e) {}
+})();
+
+function saveNet() {
+  if (netQueued || !chrome.storage.session) return;
+  netQueued = true;
+  setTimeout(() => {
+    netQueued = false;
+    chrome.storage.session.set({ beamNet: net }).catch(() => {});
+  }, 250);
+}
+
+function netRow(tabId, requestId) {
+  const rows = net[tabId];
+  if (!rows) return null;
+  for (let i = rows.length - 1; i >= 0; i--) if (rows[i].id === requestId) return rows[i];
+  return null;
+}
+
+/* Listeners are registered synchronously, so a request wakes the worker. The
+   bind and the old log are restored first, then the event is recorded. */
+const netFilter = { urls: ['<all_urls>'] };
+
+chrome.webRequest.onBeforeRequest.addListener((d) => {
+  if (d.tabId < 0) return;
+  Promise.all([bindReady, netReady]).then(() => {
+    if (d.tabId !== curTab && d.tabId !== beamTab) return;
+    const rows = net[d.tabId] || (net[d.tabId] = []);
+    rows.push({
+      id: d.requestId,
+      t: Math.round(d.timeStamp),
+      method: d.method,
+      url: d.url.length > NET_URL_MAX ? d.url.slice(0, NET_URL_MAX) + '…' : d.url,
+      type: d.type,
+      frame: d.frameId
+    });
+    if (rows.length > NET_MAX) rows.splice(0, rows.length - NET_MAX);
+    saveNet();
+  });
+}, netFilter);
+
+chrome.webRequest.onCompleted.addListener((d) => {
+  if (d.tabId < 0) return;
+  netReady.then(() => {
+    const row = netRow(d.tabId, d.requestId);
+    if (!row) return;
+    row.status = d.statusCode;
+    row.ms = Math.max(0, Math.round(d.timeStamp - row.t));
+    if (d.fromCache) row.cache = true;
+    const ct = (d.responseHeaders || []).find((h) => h.name.toLowerCase() === 'content-type');
+    if (ct && ct.value) row.mime = ct.value.split(';')[0].trim();
+    saveNet();
+  });
+}, netFilter, ['responseHeaders']);
+
+chrome.webRequest.onErrorOccurred.addListener((d) => {
+  if (d.tabId < 0) return;
+  netReady.then(() => {
+    const row = netRow(d.tabId, d.requestId);
+    if (!row) return;
+    row.error = d.error;
+    row.ms = Math.max(0, Math.round(d.timeStamp - row.t));
+    saveNet();
+  });
+}, netFilter);
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  netReady.then(() => {
+    if (!net[tabId]) return;
+    delete net[tabId];
+    saveNet();
+  });
+});
+
+/* webRequest calls fetch() and XHR both "xmlhttprequest" */
+const NET_TYPES = { xhr: 'xmlhttprequest', fetch: 'xmlhttprequest', doc: 'main_frame', js: 'script', css: 'stylesheet', img: 'image' };
+
+async function network(tab, cmd) {
+  await netReady;
+  let rows = net[tab.id] || [];
+  const total = rows.length;
+  if (cmd.type) {
+    const want = String(cmd.type).split(',').map((s) => NET_TYPES[s.trim()] || s.trim());
+    rows = rows.filter((r) => want.indexOf(r.type) >= 0);
+  }
+  if (cmd.filter) {
+    const f = String(cmd.filter).toLowerCase();
+    rows = rows.filter((r) => r.url.toLowerCase().indexOf(f) >= 0);
+  }
+  if (cmd.method) {
+    const m = String(cmd.method).toUpperCase();
+    rows = rows.filter((r) => r.method === m);
+  }
+  if (cmd.failed) rows = rows.filter((r) => r.error || r.status >= 400);
+  if (cmd.last) rows = rows.slice(-Number(cmd.last));
+  const out = {
+    tab: tab.id,
+    total,
+    count: rows.length,
+    requests: rows.map((r) => Object.assign({}, r, { id: undefined }))
+  };
+  if (cmd.clear) {
+    delete net[tab.id];
+    saveNet();
+    out.cleared = true;
+  }
+  return out;
+}
+
 /* ----------------------------------------------------------------- inject */
 
 const READ_OPS = ['info', 'snap', 'outline', 'fields', 'text', 'html'];
@@ -667,6 +792,9 @@ async function dispatch(cmd) {
         frame: cmd.frame
       });
     }
+
+    case 'network':
+      return network(await targetTab(cmd), cmd);
 
     case 'nav': {
       const t = await targetTab(cmd);

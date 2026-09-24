@@ -97,7 +97,7 @@ beam set @payload.json
 `open` works in a separate Chrome window that stays unfocused, and reuses one
 tab. `beam focus` brings that window forward.
 
-Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `tabs` · `frames`
+Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `tabs` · `frames` · `network`
 Act: `open` · `focus` · `nav` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
 `set` · `do` · `wait` · `scroll` · `shot`
 

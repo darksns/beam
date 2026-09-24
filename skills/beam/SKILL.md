@@ -41,6 +41,7 @@ beam fields  [--sel CSS] [--hidden] [--vlen N]  # every form field, as JSON
 beam text    [--sel CSS] [--max N] [--from N]   # readable text
 beam html    [--sel CSS] [--max N]              # raw HTML (use it last)
 beam info | tabs | frames
+beam network [filter] [--type xhr,doc,js,css,img] [--method M] [--failed] [--last N] [--clear]
 ```
 
 `snap` returns lines like:
@@ -77,6 +78,16 @@ beam set --frame 583 @payload.json
 
 `--frame all` is for reading only: to act, name one frame. Frame ids change when
 the application recreates them — re-read them, do not reuse them.
+
+### Network
+
+`beam network` lists the requests made by the bound tab (and Beam's own tab)
+since it was bound: status, method, type, time, url. Bodies and headers are not
+captured. `--type xhr` keeps fetch/XHR calls only, `--failed` keeps errors and
+status >= 400, `--clear` empties the log after printing it. To see what one
+action calls: `beam network --clear`, act, then `beam network --type xhr`.
+Recording starts when a tab is bound: the very first `open` of a new Beam
+window misses its initial load, so `beam reload` if that matters.
 
 ## Acting
 
