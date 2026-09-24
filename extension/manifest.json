@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Beam",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Drive web pages from the terminal: read the structure as text, fill fields, upload files. Built for assisted backoffice automation.",
   "permissions": [
     "tabs",
