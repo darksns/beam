@@ -46,6 +46,10 @@
   footer button { flex: 1; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button:hover { filter: brightness(1.06); }
+  .sessions { margin: 8px 14px 0; font-size: 11.5px; color: var(--muted); }
+  .sessions p { margin: 0; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+  .sessions b { font-weight: 600; }
+  .sessions span { color: var(--muted); }
   .hint { padding: 0 14px 12px; font-size: 11px; color: var(--muted); }
   details { margin: 0 14px 14px; }
   summary { font-size: 11px; color: var(--muted); cursor: pointer; user-select: none; }
@@ -80,9 +84,10 @@
 
   <dl>
     <div><dt>hub port</dt><dd><input type="number" id="port" min="1" max="65535" step="1"></dd></div>
-    <div><dt>bound tab</dt><dd id="tab">none</dd></div>
     <div><dt>version</dt><dd id="ver">—</dd></div>
   </dl>
+
+  <div class="sessions" id="sessions">none</div>
 
   <footer>
     <button class="primary" id="reconnect">Reconnect</button>

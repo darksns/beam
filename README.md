@@ -79,7 +79,7 @@ The installer links `beam` and `beam-mdconv` into `~/.local/bin`, creates
 `~/.beam/` (hub token and site adapters) and, if Claude Code is installed, links
 the two skills into `~/.claude/skills/`. The hub starts by itself on every
 command. The toolbar icon opens a panel with the connection state, the port, the
-bound tab and two buttons: **Reconnect** and **Release tab**; a red `!` on the
+sessions and two buttons: **Reconnect** and **Release tab**; a red `!` on the
 icon means the connection dropped.
 
 Requires Node 18+ and Chrome (or any Chromium with MV3 extensions).
@@ -95,9 +95,12 @@ beam set @payload.json
 ```
 
 `open` works in a separate Chrome window that stays unfocused, and reuses one
-tab. `beam focus` brings that window forward.
+tab. `beam focus` brings that window forward. Two agents in parallel export
+different `BEAM_SESSION` names (or pass `--session`); each name gets its own
+window and tab, and will not take a tab another session owns. With no name,
+everyone shares the session `default`.
 
-Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `tabs` · `frames` · `network`
+Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `tabs` · `frames` · `sessions` · `network`
 Act: `open` · `focus` · `nav` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
 `set` · `do` · `wait` · `scroll` · `shot`
 

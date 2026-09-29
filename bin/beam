@@ -48,12 +48,12 @@ const HELP = `beam — drive Chrome as text
     beam fields  [--sel CSS] [--hidden]             every form field (JSON)
     beam text    [--sel CSS] [--max N] [--from N]   readable text
     beam html    [--sel CSS] [--max N]              raw HTML
-    beam info | tabs | frames
+    beam info | tabs | frames | sessions
     beam network [filter] [--type xhr,doc,js,css,img] [--method M] [--failed] [--last N] [--clear]
                                                     requests of the bound tab (no bodies)
 
   act
-    beam open <url> [--new] [--focus]   its own window, unfocused; reuses that tab
+    beam open <url> [--new] [--focus]   its own window, unfocused; reuses that session's tab
     beam focus                          bring the Beam window forward
     beam nav <url> | reload | back | forward | close | use <tab> [--focus]
     beam click <target>
@@ -70,7 +70,8 @@ const HELP = `beam — drive Chrome as text
 
   target: @12 (ref from snap) · @3:12 (ref inside frame 3) · css=.klass · text=Update
           label=Title · name=post_title · title=Heading Settings
-  global: --tab <id>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
+  global: --tab <id>  --session <nome>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
+          BEAM_SESSION=<nome>   another name, another window; unset shares "default"
   beam --version | -v   print the CLI version
 `;
 
@@ -160,7 +161,19 @@ function build() {
   if (cmd.newTab === 'false') cmd.newTab = false;
   if (cmd.target) splitFrame(cmd, 'target');
   if (cmd.frame === 'true') cmd.frame = 'all';
+  cmd.session = sessionOf();
   return cmd;
+}
+
+/* --session wins over BEAM_SESSION. No name is the shared "default" slot. */
+function sessionOf() {
+  if (opts.session === true) throw new Error('invalid session name');
+  const raw = opts.session != null && opts.session !== ''
+    ? String(opts.session)
+    : (process.env.BEAM_SESSION || '');
+  if (!raw) return 'default';
+  if (!/^[A-Za-z0-9._-]{1,40}$/.test(raw)) throw new Error('invalid session name: ' + raw);
+  return raw;
 }
 
 /* -------------------------------------------------------------- render */
@@ -181,7 +194,11 @@ function render(op, r) {
   if (op === 'text') return [`${r.title} · ${r.chars} characters`, '', r.text].join('\n');
   if (op === 'html') return r.html;
   if (op === 'tabs') {
-    return r.map((t) => `${t.current ? '*' : ' '} [${t.tab}]${t.beam ? ' beam' : ''} ${(t.title || '').slice(0, 60)}\n      ${t.url}`).join('\n');
+    return r.map((t) => `${t.current ? '*' : ' '} [${t.tab}]${t.beam ? ' beam:' + t.beam : ''} ${(t.title || '').slice(0, 60)}\n      ${t.url}`).join('\n');
+  }
+  if (op === 'sessions') {
+    if (!r.length) return 'no sessions';
+    return r.map((s) => `${s.current ? '*' : ' '} ${s.session}  [${s.tab == null ? '—' : s.tab}]  ${s.title || ''}\n      ${s.url || ''}`).join('\n');
   }
   if (op === 'fields') {
     const cut = (v) => {

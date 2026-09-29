@@ -6,10 +6,9 @@ const DEFAULT_PORT = 8777;
 let port = DEFAULT_PORT;
 let ws = null;
 let connecting = false;
-let curTab = null;
-let curUrl = null;      // the tab's url as of the last command
-let beamWindow = null;  // the unfocused window Beam owns
-let beamTab = null;     // the one tab inside it, reused by every open
+/* One slot per BEAM_SESSION. `default` is every command that names no session,
+   so a single agent keeps the old one-window behaviour. */
+let sessions = {};
 let retry = 0;
 let superseded = false; // another copy of the extension took the hub socket
 
@@ -128,7 +127,7 @@ async function connect() {
       note('open', { hello: false, error: String(e && e.message || e) });
     }
   };
-  socket.onmessage = async (ev) => {
+  socket.onmessage = (ev) => {
     let cmd;
     try { cmd = JSON.parse(ev.data); } catch { return; }
     if (cmd.type === 'replaced') {
@@ -139,13 +138,25 @@ async function connect() {
       return;
     }
     if (!cmd.id) return;
-    let out;
-    try { out = { id: cmd.id, ok: true, result: await dispatch(cmd) }; }
-    catch (e) { out = { id: cmd.id, ok: false, error: String(e && e.message || e) }; }
-    /* answer on the socket the command came in on: a reconnect in the middle
-       of a long command must not send the reply into the new one */
-    try { socket.send(JSON.stringify(out)); }
-    catch (e) { note('send-fail', { error: String(e && e.message || e) }); }
+    const job = async () => {
+      let out;
+      try { out = { id: cmd.id, ok: true, result: await dispatch(cmd) }; }
+      catch (e) { out = { id: cmd.id, ok: false, error: String(e && e.message || e) }; }
+      /* answer on the socket the command came in on: a reconnect in the middle
+         of a long command must not send the reply into the new one */
+      try { socket.send(JSON.stringify(out)); }
+      catch (e) { note('send-fail', { error: String(e && e.message || e) }); }
+    };
+    /* reloadext must not sit behind a navigation that is about to die with it */
+    if (cmd.op === 'reloadext') { job(); return; }
+    let name;
+    try { name = sessionName(cmd); }
+    catch (e) {
+      try { socket.send(JSON.stringify({ id: cmd.id, ok: false, error: String(e && e.message || e) })); }
+      catch (err) { note('send-fail', { error: String(err && err.message || err) }); }
+      return;
+    }
+    lane(name, job).catch((e) => note('send-fail', { error: String(e && e.message || e) }));
   };
   /* Only the socket that is still the current one may reset the state. An
      older socket closing used to null a perfectly healthy connection. */
@@ -203,20 +214,30 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === 'status') {
     (async () => {
       await bindReady;
-      let tabTitle = null, tabUrl = null;
-      if (curTab) {
+      const list = [];
+      for (const n of Object.keys(sessions)) {
+        const s = sessions[n];
+        if (s.curTab == null) continue;
         try {
-          const t = await chrome.tabs.get(curTab);
-          tabTitle = t.title; tabUrl = t.url;
-        } catch (e) { await bind(null); }
+          const t = await chrome.tabs.get(s.curTab);
+          list.push({ name: n, tab: t.id, title: t.title, url: t.url });
+        } catch (e) {
+          s.curTab = null;
+          s.curUrl = null;
+          await saveSessions();
+        }
       }
+      const home = list.find((row) => row.name === DEFAULT_SESSION) || null;
       await debugReady;
       reply({
         connected: !!ws && ws.readyState === WebSocket.OPEN,
         superseded,
         port,
         version: chrome.runtime.getManifest().version,
-        tab: curTab, tabTitle, tabUrl,
+        tab: home ? home.tab : null,
+        tabTitle: home ? home.title : null,
+        tabUrl: home ? home.url : null,
+        sessions: list,
         debug: {
           id: chrome.runtime.id,
           ua: navigator.userAgent,
@@ -243,7 +264,18 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     reply({ ok: true });
     return;
   }
-  if (msg.type === 'unbind') { bind(null).then(() => reply({ ok: true })); return true; }
+  if (msg.type === 'unbind') {
+    (async () => {
+      await bindReady;
+      for (const n of Object.keys(sessions)) {
+        sessions[n].curTab = null;
+        sessions[n].curUrl = null;
+      }
+      await saveSessions();
+      reply({ ok: true });
+    })();
+    return true;
+  }
   if (msg.type === 'setport') {
     (async () => {
       port = Number(msg.port) || DEFAULT_PORT;
@@ -261,49 +293,193 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 
 /* ------------------------------------------------------------------- tab */
 
+const DEFAULT_SESSION = 'default';
+
+/* Same session, one at a time: two `nav`/`set` must not trade `curUrl`.
+   Different names run together. The stored tail swallows rejections so one
+   failed command does not stall the session. */
+const lanes = new Map();
+function lane(name, fn) {
+  const prev = lanes.get(name) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  lanes.set(name, run.then(() => {}, () => {}));
+  return run;
+}
+
+/* Creating a window and putting the person's focus back has to be one
+   critical section. Two `open`s that each remember "the focused window" and
+   then restore it will hand the focus to each other's window. */
+let focusChain = Promise.resolve();
+function withFocus(fn) {
+  const run = focusChain.then(fn, fn);
+  focusChain = run.then(() => {}, () => {});
+  return run;
+}
+
+function sessionName(cmd) {
+  const raw = cmd && cmd.session != null && cmd.session !== '' ? String(cmd.session) : DEFAULT_SESSION;
+  if (!/^[A-Za-z0-9._-]{1,40}$/.test(raw)) throw new Error('invalid session name: ' + raw);
+  return raw;
+}
+
+function slot(name) {
+  return sessions[name] || (sessions[name] = { curTab: null, curUrl: null, beamWindow: null, beamTab: null });
+}
+
+function normalizeSlot(s) {
+  return {
+    curTab: s && s.curTab != null ? s.curTab : null,
+    curUrl: s && s.curUrl != null ? s.curUrl : null,
+    beamWindow: s && s.beamWindow != null ? s.beamWindow : null,
+    beamTab: s && s.beamTab != null ? s.beamTab : null
+  };
+}
+
+/* Another session's window or tab. `name` is allowed to own them. */
+function foreignWindow(windowId, name) {
+  if (windowId == null) return null;
+  for (const n of Object.keys(sessions)) {
+    if (n === name) continue;
+    if (sessions[n].beamWindow === windowId) return n;
+  }
+  return null;
+}
+
+function foreignTab(tabId, name) {
+  if (tabId == null) return null;
+  for (const n of Object.keys(sessions)) {
+    if (n === name) continue;
+    const s = sessions[n];
+    if (s.curTab === tabId || s.beamTab === tabId) return n;
+  }
+  return null;
+}
+
+function assertFree(tabId, name, cmd) {
+  if (cmd && cmd.force) return;
+  const other = foreignTab(tabId, name);
+  if (other) {
+    throw new Error(
+      'tab ' + tabId + ' belongs to session ' + other +
+      '. Repeat with --force if that is what you want.'
+    );
+  }
+}
+
+function ownsTab(tabId) {
+  for (const n of Object.keys(sessions)) {
+    const s = sessions[n];
+    if (s.curTab === tabId || s.beamTab === tabId) return true;
+  }
+  return false;
+}
+
+function beamNames(tabId) {
+  const names = [];
+  for (const n of Object.keys(sessions)) {
+    const s = sessions[n];
+    if (s.curTab === tabId || s.beamTab === tabId) names.push(n);
+  }
+  return names;
+}
+
 /* Survives MV3 service-worker death. session, not local: a browser restart
-   should not write into yesterday's tab. */
-async function saveBind() {
-  try {
-    if (chrome.storage.session) await chrome.storage.session.set({ curTab, curUrl, beamWindow, beamTab });
-  } catch (e) {}
+   should not write into yesterday's tab. Queued so two slots cannot persist
+   out of order and drop the newer map. */
+let saveChain = Promise.resolve();
+function saveSessions() {
+  const run = saveChain.then(() => {}, () => {}).then(async () => {
+    try {
+      if (!chrome.storage.session) return;
+      await chrome.storage.session.set({ beamSessions: sessions });
+      await chrome.storage.session.remove(['curTab', 'curUrl', 'beamWindow', 'beamTab']);
+    } catch (e) {}
+  });
+  saveChain = run.then(() => {}, () => {});
+  return run;
 }
 
 const bindReady = (async () => {
   try {
     if (!chrome.storage.session) return;
-    const s = await chrome.storage.session.get(['curTab', 'curUrl', 'beamWindow', 'beamTab']);
-    if (s.curTab != null) curTab = s.curTab;
-    if (s.curUrl != null) curUrl = s.curUrl;
-    if (s.beamWindow != null) beamWindow = s.beamWindow;
-    if (s.beamTab != null) beamTab = s.beamTab;
+    const s = await chrome.storage.session.get(['beamSessions', 'curTab', 'curUrl', 'beamWindow', 'beamTab']);
+    if (s.beamSessions && typeof s.beamSessions === 'object' && !Array.isArray(s.beamSessions)) {
+      sessions = {};
+      for (const n of Object.keys(s.beamSessions)) {
+        if (!/^[A-Za-z0-9._-]{1,40}$/.test(n)) continue;
+        sessions[n] = normalizeSlot(s.beamSessions[n]);
+      }
+      if (s.curTab != null || s.curUrl != null || s.beamWindow != null || s.beamTab != null) {
+        await chrome.storage.session.remove(['curTab', 'curUrl', 'beamWindow', 'beamTab']);
+      }
+    } else if (s.curTab != null || s.curUrl != null || s.beamWindow != null || s.beamTab != null) {
+      sessions[DEFAULT_SESSION] = normalizeSlot(s);
+      await saveSessions();
+    }
   } catch (e) {}
 })();
 
-async function bind(tab) {
-  if (tab) {
-    curTab = tab.id;
-    if (tab.url) curUrl = tab.url;
-  } else {
-    curTab = null;
-    curUrl = null;
+/* A stored tab id can be reused by Chrome after the tab dies. If the id is
+   gone, or it no longer sits in the window we created, drop it so the next
+   command cannot write into a tab the person opened. */
+async function freshen(name) {
+  const s = sessions[name];
+  if (!s) return;
+  let changed = false;
+  if (s.beamTab != null) {
+    try {
+      const t = await chrome.tabs.get(s.beamTab);
+      if (s.beamWindow != null && t.windowId !== s.beamWindow) {
+        if (s.curTab === s.beamTab) { s.curTab = null; s.curUrl = null; }
+        s.beamTab = null;
+        s.beamWindow = null;
+        changed = true;
+      }
+    } catch (e) {
+      if (s.curTab === s.beamTab) { s.curTab = null; s.curUrl = null; }
+      s.beamTab = null;
+      s.beamWindow = null;
+      changed = true;
+    }
+  } else if (s.beamWindow != null) {
+    try { await chrome.windows.get(s.beamWindow); }
+    catch (e) { s.beamWindow = null; changed = true; }
   }
-  await saveBind();
+  if (s.curTab != null) {
+    try { await chrome.tabs.get(s.curTab); }
+    catch (e) { s.curTab = null; s.curUrl = null; changed = true; }
+  }
+  if (changed) await saveSessions();
 }
 
-async function bindUrl(url) {
-  curUrl = url;
-  await saveBind();
+async function bind(name, tab) {
+  const s = slot(name);
+  if (tab) {
+    s.curTab = tab.id;
+    if (tab.url) s.curUrl = tab.url;
+  } else {
+    s.curTab = null;
+    s.curUrl = null;
+  }
+  await saveSessions();
 }
 
-async function targetTab(cmd) {
+async function bindUrl(name, url) {
+  slot(name).curUrl = url;
+  await saveSessions();
+}
+
+async function targetTab(cmd, name) {
   await bindReady;
   if (cmd.tab) {
     const t = await chrome.tabs.get(Number(cmd.tab));
+    assertFree(t.id, name, cmd);
     return t;
   }
-  if (curTab) {
-    try { return await chrome.tabs.get(curTab); } catch (e) { await bind(null); }
+  const s = sessions[name];
+  if (s && s.curTab) {
+    try { return await chrome.tabs.get(s.curTab); }
+    catch (e) { await bind(name, null); }
   }
   throw new Error('niente tab agganciata: beam open <url> oppure beam use <id>');
 }
@@ -324,11 +500,14 @@ async function keepUserFocus(prevId) {
   try { await chrome.windows.update(prevId, { focused: true }); } catch (e) {}
 }
 
-/* Make the tab the selected one in its own window. Never focuses the window.
-   Returns null when the tab is in the window the person is using and is not
-   the one they are looking at: switching it would take their screen. */
-async function selectWithoutFocus(tab) {
+/* Make the tab the selected one in its session's window. Never focuses the
+   window. Returns null when activating it would change the tab the person is
+   looking at, or a tab that belongs to them or to another session. */
+async function selectWithoutFocus(tab, name) {
   if (tab.active) return tab;
+  const s = sessions[name];
+  if (!s || s.beamWindow == null || tab.windowId !== s.beamWindow) return null;
+  if (foreignWindow(tab.windowId, name)) return null;
   const prev = await focusedWindowId();
   if (prev != null && tab.windowId === prev) return null;
   await chrome.tabs.update(tab.id, { active: true });
@@ -343,51 +522,61 @@ async function focusTab(tab) {
   return chrome.tabs.get(tab.id);
 }
 
-/* Beam's own window: one tab, never focused unless --focus / beam focus.
+/* This session's window: one tab, never focused unless --focus / beam focus.
    A tab that is active in an unfocused window still has layout, which is
-   what hover and Beaver Builder need. */
-async function ensureBeamTab(url, opts) {
+   what hover and Beaver Builder need. Never adopts another session's window. */
+async function ensureBeamTab(name, url, opts) {
   opts = opts || {};
-  const prev = await focusedWindowId();
-  let reused = false;
-  let tab = null;
+  const s = slot(name);
+  return withFocus(async () => {
+    const prev = await focusedWindowId();
+    let reused = false;
+    let tab = null;
 
-  if (beamTab && !opts.fresh) {
-    try { tab = await chrome.tabs.get(beamTab); }
-    catch (e) { tab = null; beamTab = null; beamWindow = null; }
-  }
+    if (s.beamTab && !opts.fresh) {
+      try {
+        tab = await chrome.tabs.get(s.beamTab);
+        if ((s.beamWindow != null && tab.windowId !== s.beamWindow) || foreignWindow(tab.windowId, name)) {
+          tab = null;
+          s.beamTab = null;
+          s.beamWindow = null;
+        }
+      } catch (e) {
+        tab = null;
+        s.beamTab = null;
+        s.beamWindow = null;
+      }
+    }
 
-  if (tab) {
-    await chrome.tabs.update(tab.id, { url: url, active: true });
-    await waitLoad(tab.id);
-    tab = await chrome.tabs.get(tab.id);
-    reused = true;
-  } else if (opts.fresh && beamWindow) {
-    try {
-      await chrome.windows.get(beamWindow);
-      tab = await chrome.tabs.create({ windowId: beamWindow, url: url, active: true });
+    if (tab) {
+      await chrome.tabs.update(tab.id, { url: url, active: true });
       await waitLoad(tab.id);
       tab = await chrome.tabs.get(tab.id);
-    } catch (e) { tab = null; beamWindow = null; }
-  }
+      reused = true;
+    } else if (opts.fresh && s.beamWindow && !foreignWindow(s.beamWindow, name)) {
+      try {
+        await chrome.windows.get(s.beamWindow);
+        tab = await chrome.tabs.create({ windowId: s.beamWindow, url: url, active: true });
+        await waitLoad(tab.id);
+        tab = await chrome.tabs.get(tab.id);
+      } catch (e) { tab = null; s.beamWindow = null; }
+    }
 
-  if (!tab) {
-    const win = await chrome.windows.create({ url: url, focused: false, type: 'normal' });
-    tab = (win.tabs && win.tabs[0]) || (await chrome.tabs.query({ windowId: win.id }))[0];
-    await waitLoad(tab.id);
-    tab = await chrome.tabs.get(tab.id);
-  }
+    if (!tab) {
+      const win = await chrome.windows.create({ url: url, focused: false, type: 'normal' });
+      tab = (win.tabs && win.tabs[0]) || (await chrome.tabs.query({ windowId: win.id }))[0];
+      await waitLoad(tab.id);
+      tab = await chrome.tabs.get(tab.id);
+    }
 
-  beamTab = tab.id;
-  beamWindow = tab.windowId;
-  await saveBind();
+    s.beamTab = tab.id;
+    s.beamWindow = tab.windowId;
+    await saveSessions();
 
-  if (opts.focus) {
-    tab = await focusTab(tab);
-  } else {
-    await keepUserFocus(prev);
-  }
-  return { tab: tab, reused: reused };
+    if (opts.focus) tab = await focusTab(tab);
+    else await keepUserFocus(prev);
+    return { tab: tab, reused: reused };
+  });
 }
 
 function waitLoad(tabId, timeout = 20000) {
@@ -442,7 +631,7 @@ const netFilter = { urls: ['<all_urls>'] };
 chrome.webRequest.onBeforeRequest.addListener((d) => {
   if (d.tabId < 0) return;
   Promise.all([bindReady, netReady]).then(() => {
-    if (d.tabId !== curTab && d.tabId !== beamTab) return;
+    if (!ownsTab(d.tabId)) return;
     const rows = net[d.tabId] || (net[d.tabId] = []);
     rows.push({
       id: d.requestId,
@@ -483,6 +672,15 @@ chrome.webRequest.onErrorOccurred.addListener((d) => {
 }, netFilter);
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  bindReady.then(async () => {
+    let changed = false;
+    for (const n of Object.keys(sessions)) {
+      const s = sessions[n];
+      if (s.curTab === tabId) { s.curTab = null; s.curUrl = null; changed = true; }
+      if (s.beamTab === tabId) { s.beamTab = null; s.beamWindow = null; changed = true; }
+    }
+    if (changed) await saveSessions();
+  });
   netReady.then(() => {
     if (!net[tabId]) return;
     delete net[tabId];
@@ -545,13 +743,14 @@ function needsLayout(cmd) {
 /* A tab can be reused by the person while Beam is working in it. Before
    writing, check the url is still the one the last command left behind: if it
    changed and Beam did not do it, stop. */
-function guardUrl(tab, cmd) {
+function guardUrl(tab, cmd, name) {
   if (!isWrite(cmd) || cmd.force) return;
-  if (!curUrl || tab.id !== curTab) return;
-  if (tab.url === curUrl) return;
+  const s = sessions[name];
+  if (!s || !s.curUrl || tab.id !== s.curTab) return;
+  if (tab.url === s.curUrl) return;
   throw new Error(
     'tab ' + tab.id + ' was changed from outside: it is now ' + tab.url +
-    ' instead of ' + curUrl + '. Re-bind it with `beam use <id>` or `beam nav <url>`' +
+    ' instead of ' + s.curUrl + '. Re-bind it with `beam use <id>` or `beam nav <url>`' +
     ', or repeat with --force if that is what you want.'
   );
 }
@@ -653,6 +852,8 @@ function extFor(mime) {
 
 async function dispatch(cmd) {
   await bindReady;
+  const name = sessionName(cmd);
+  if (cmd.op !== 'ping' && cmd.op !== 'reloadext') await freshen(name);
   switch (cmd.op) {
 
     case 'ping':
@@ -670,67 +871,95 @@ async function dispatch(cmd) {
 
     case 'tabs': {
       const all = await chrome.tabs.query({});
-      return all.map((t) => ({
-        tab: t.id, active: t.active, current: t.id === curTab, beam: t.id === beamTab,
-        window: t.windowId,
-        title: t.title, url: t.url
-      }));
+      const s = sessions[name];
+      return all.map((t) => {
+        const owned = beamNames(t.id);
+        return {
+          tab: t.id, active: t.active, current: !!(s && t.id === s.curTab),
+          beam: owned.length ? owned.join(',') : false,
+          window: t.windowId,
+          title: t.title, url: t.url
+        };
+      });
+    }
+
+    case 'sessions': {
+      const rows = [];
+      for (const n of Object.keys(sessions)) {
+        const s = sessions[n];
+        if (s.curTab == null && s.beamTab == null) continue;
+        const tabId = s.curTab != null ? s.curTab : s.beamTab;
+        let title = null, url = s.curUrl;
+        try {
+          const t = await chrome.tabs.get(tabId);
+          title = t.title;
+          url = t.url;
+        } catch (e) {}
+        rows.push({
+          session: n, tab: s.curTab, beamTab: s.beamTab, window: s.beamWindow,
+          title: title, url: url, current: n === name
+        });
+      }
+      rows.sort((a, b) => a.session < b.session ? -1 : a.session > b.session ? 1 : 0);
+      return rows;
     }
 
     case 'focus': {
-      const t = await focusTab(await targetTab(cmd));
-      return { tab: t.id, url: t.url, title: t.title, focused: true };
+      const t = await targetTab(cmd, name);
+      const focused = await withFocus(() => focusTab(t));
+      return { tab: focused.id, url: focused.url, title: focused.title, focused: true, session: name };
     }
 
     case 'use': {
       const t = await chrome.tabs.get(Number(cmd.tab));
-      await bind(t);
-      if (cmd.focus) await focusTab(t);
-      return { tab: t.id, url: t.url, title: t.title, focused: !!cmd.focus };
+      assertFree(t.id, name, cmd);
+      await bind(name, t);
+      if (cmd.focus) await withFocus(() => focusTab(t));
+      return { tab: t.id, url: t.url, title: t.title, focused: !!cmd.focus, session: name };
     }
 
     case 'open': {
       if (!cmd.url) throw new Error('missing url');
-      const got = await ensureBeamTab(cmd.url, { fresh: cmd.new === true, focus: cmd.focus === true });
-      await bind(got.tab);
+      const got = await ensureBeamTab(name, cmd.url, { fresh: cmd.new === true, focus: cmd.focus === true });
+      await bind(name, got.tab);
       return {
         tab: got.tab.id, url: got.tab.url, title: got.tab.title,
-        window: got.tab.windowId, focused: cmd.focus === true, reused: got.reused
+        window: got.tab.windowId, focused: cmd.focus === true, reused: got.reused,
+        session: name
       };
     }
 
     case 'close': {
-      const t = await targetTab(cmd);
-      const wasBeam = t.id === beamTab;
+      const t = await targetTab(cmd, name);
       await chrome.tabs.remove(t.id);
-      if (curTab === t.id) await bind(null);
-      if (wasBeam) {
-        beamTab = null;
-        beamWindow = null;
-        await saveBind();
+      for (const n of Object.keys(sessions)) {
+        const o = sessions[n];
+        if (o.curTab === t.id) { o.curTab = null; o.curUrl = null; }
+        if (o.beamTab === t.id) { o.beamTab = null; o.beamWindow = null; }
       }
-      return { closed: t.id };
+      await saveSessions();
+      return { closed: t.id, session: name };
     }
 
     case 'reload': {
-      const t = await targetTab(cmd);
+      const t = await targetTab(cmd, name);
       await chrome.tabs.reload(t.id);
       await waitLoad(t.id);
-      await bindUrl((await chrome.tabs.get(t.id)).url);
-      return { url: curUrl };
+      await bindUrl(name, (await chrome.tabs.get(t.id)).url);
+      return { url: sessions[name].curUrl };
     }
 
     case 'back':
     case 'forward': {
-      const t = await targetTab(cmd);
+      const t = await targetTab(cmd, name);
       await (cmd.op === 'back' ? chrome.tabs.goBack(t.id) : chrome.tabs.goForward(t.id));
       await waitLoad(t.id);
-      await bindUrl((await chrome.tabs.get(t.id)).url);
-      return { url: curUrl };
+      await bindUrl(name, (await chrome.tabs.get(t.id)).url);
+      return { url: sessions[name].curUrl };
     }
 
     case 'frames': {
-      const t = await targetTab(cmd);
+      const t = await targetTab(cmd, name);
       const nav = await chrome.webNavigation.getAllFrames({ tabId: t.id }).catch(() => []);
       const byId = new Map((nav || []).map((f) => [f.frameId, { frame: f.frameId, parent: f.parentFrameId, url: f.url }]));
       /* injection also finds the frames webNavigation does not list */
@@ -746,26 +975,35 @@ async function dispatch(cmd) {
     }
 
     case 'shot': {
-      const t = await targetTab(cmd);
-      const prev = await focusedWindowId();
-      const selected = await selectWithoutFocus(t);
-      const shotOpts = { format: 'jpeg', quality: cmd.quality || 55 };
-      let data = '';
-      /* only capture once this tab is the one on screen in its window,
-         otherwise we would photograph whatever the person is looking at */
-      if (selected) {
-        try { data = await chrome.tabs.captureVisibleTab(selected.windowId, shotOpts); }
-        catch (e) { data = ''; }
-      }
-      if (!data || data.length < 200) {
-        await chrome.windows.update(t.windowId, { focused: true });
-        await chrome.tabs.update(t.id, { active: true });
-        try {
-          data = await chrome.tabs.captureVisibleTab(t.windowId, shotOpts);
-        } finally {
-          await keepUserFocus(prev);
+      const t = await targetTab(cmd, name);
+      const data = await withFocus(async () => {
+        const prev = await focusedWindowId();
+        const selected = await selectWithoutFocus(t, name);
+        const shotOpts = { format: 'jpeg', quality: cmd.quality || 55 };
+        let shot = '';
+        /* only capture once this tab is the one on screen in its window,
+           otherwise we would photograph whatever the person is looking at */
+        if (selected) {
+          try { shot = await chrome.tabs.captureVisibleTab(selected.windowId, shotOpts); }
+          catch (e) { shot = ''; }
         }
-      }
+        const own = sessions[name] && t.windowId === sessions[name].beamWindow;
+        if ((!shot || shot.length < 200) && !own) {
+          throw new Error(selected
+            ? 'screenshot failed'
+            : 'screenshot would switch a tab this session does not own');
+        }
+        if (!shot || shot.length < 200) {
+          await chrome.windows.update(t.windowId, { focused: true });
+          await chrome.tabs.update(t.id, { active: true });
+          try {
+            shot = await chrome.tabs.captureVisibleTab(t.windowId, shotOpts);
+          } finally {
+            await keepUserFocus(prev);
+          }
+        }
+        return shot;
+      });
       if (!data) throw new Error('screenshot failed');
       return { dataUrl: data, bytes: data.length };
     }
@@ -773,8 +1011,8 @@ async function dispatch(cmd) {
     /* the service worker does the fetch: it has the host permissions and is
        not subject to the page's CORS. The bytes reach the agent as base64. */
     case 'upload': {
-      const t = await targetTab(cmd);
-      guardUrl(t, cmd);
+      const t = await targetTab(cmd, name);
+      guardUrl(t, cmd, name);
       const r = await fetch(cmd.url);
       if (!r.ok) throw new Error('download failed: HTTP ' + r.status + ' ' + cmd.url);
       const buf = new Uint8Array(await r.arrayBuffer());
@@ -794,27 +1032,27 @@ async function dispatch(cmd) {
     }
 
     case 'network':
-      return network(await targetTab(cmd), cmd);
+      return network(await targetTab(cmd, name), cmd);
 
     case 'nav': {
-      const t = await targetTab(cmd);
+      const t = await targetTab(cmd, name);
       await chrome.tabs.update(t.id, { url: cmd.url });
       await waitLoad(t.id);
-      await bind(await chrome.tabs.get(t.id));
-      return { url: curUrl };
+      await bind(name, await chrome.tabs.get(t.id));
+      return { url: sessions[name].curUrl };
     }
 
     default: {
-      const t = await targetTab(cmd);
-      guardUrl(t, cmd);
+      const t = await targetTab(cmd, name);
+      guardUrl(t, cmd, name);
       /* Layout needs the tab selected in its window, not the window focused.
-         In the person's own window, leave their tab alone. */
+         A tab the person owns, or another session's, stays where it is. */
       if (needsLayout(cmd)) {
-        try { await selectWithoutFocus(t); } catch (e) {}
+        try { await withFocus(() => selectWithoutFocus(t, name)); } catch (e) {}
       }
       const r = await page(t, cmd);
       /* an action can navigate the page: realign the bookmark */
-      try { await bindUrl((await chrome.tabs.get(t.id)).url); } catch (e) {}
+      try { await bindUrl(name, (await chrome.tabs.get(t.id)).url); } catch (e) {}
       return r;
     }
   }

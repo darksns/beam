@@ -17,13 +17,7 @@ function paint(s) {
   if (!editingPort) $('port').value = s.port;
   $('ver').textContent = s.version;
 
-  if (s.tab) {
-    $('tab').textContent = s.tabTitle || ('#' + s.tab);
-    $('tab').title = s.tabUrl || '';
-  } else {
-    $('tab').textContent = 'none';
-    $('tab').title = '';
-  }
+  paintSessions(s.sessions);
 
   $('hint').textContent = on
     ? ''
@@ -136,6 +130,31 @@ function deadDump(err) {
     '',
     'Reload Beam in chrome://extensions. The log lives in the worker; if the worker is dead there is nothing to copy yet.'
   ].join('\n');
+}
+
+function paintSessions(list) {
+  const box = $('sessions');
+  const label = !list || !list.length
+    ? 'none'
+    : list.map((row) => row.name + '\n' + (row.title || ('#' + row.tab)) + '\n' + (row.url || '')).join('\n');
+  if (box.dataset.view === label) return;
+  box.dataset.view = label;
+  box.textContent = '';
+  if (!list || !list.length) {
+    box.textContent = 'none';
+    return;
+  }
+  for (const row of list) {
+    const p = document.createElement('p');
+    const b = document.createElement('b');
+    b.textContent = row.name;
+    const span = document.createElement('span');
+    span.textContent = ' · ' + (row.title || ('#' + row.tab));
+    p.title = row.url || '';
+    p.appendChild(b);
+    p.appendChild(span);
+    box.appendChild(p);
+  }
 }
 
 function paintDebug(text) {

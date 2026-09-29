@@ -24,6 +24,8 @@ or a widget is undecipherable from the DOM. The normal flow is:
    unfocused, and every later `open` reuses that same tab. Do not pass `--new`.
    Do not pass `--focus` unless the person asked to look at it. Do not
    `beam close` when the task is done: the window is meant to stay.
+   Two agents at once each export a different `BEAM_SESSION` before `open`.
+   The same name shares a window; no name shares `default`.
 2. `beam snap` (or `beam fields`) to read the page **once**
 3. act with `set` / `do`, which do everything in a single round trip
 4. re-read only what matters (`beam snap --sel ...`) to verify
@@ -40,7 +42,7 @@ beam outline [--sel CSS] [--depth N]            # the HTML structure tree
 beam fields  [--sel CSS] [--hidden] [--vlen N]  # every form field, as JSON
 beam text    [--sel CSS] [--max N] [--from N]   # readable text
 beam html    [--sel CSS] [--max N]              # raw HTML (use it last)
-beam info | tabs | frames
+beam info | tabs | frames | sessions
 beam network [filter] [--type xhr,doc,js,css,img] [--method M] [--failed] [--last N] [--clear]
 ```
 
@@ -92,7 +94,7 @@ window misses its initial load, so `beam reload` if that matters.
 ## Acting
 
 ```
-beam open <url> [--new] [--focus]   its own window, unfocused; reuses that tab
+beam open <url> [--new] [--focus]   its own window, unfocused; reuses that session's tab
 beam focus                          bring the Beam window forward
 beam nav <url> | reload | back | forward | close | use <tab> [--focus]
 beam click <target>
@@ -177,14 +179,31 @@ beam do --frame ID '[
 ]'
 ```
 
+## Parallel sessions
+
+Each `BEAM_SESSION` (or `beam --session <name>`) owns one unfocused window and
+reuses one tab inside it. Commands in one session never navigate, activate, or
+`use` a tab that belongs to another session (`--force` is the override, same
+as the tab guard). Names are `[A-Za-z0-9._-]`, up to 40 characters.
+
+```bash
+export BEAM_SESSION=pages
+beam open https://example.com/wp-admin
+```
+
+`beam sessions` lists them. `beam tabs` marks each owned tab with `beam:<name>`
+and `*` for the tab this session is bound to. Do not close the tab when the
+task is done.
+
 ## The tab guard
 
-Beam stays bound to the tab named by `use`/`open`/`nav`. `open` keeps that tab
-in Beam's own unfocused window and reuses it. If the person moves that tab
-elsewhere, every **write** command is refused and the new url is reported:
-re-bind with `beam use <id>` after looking at `beam tabs`. `--force` exists but
-is only for after you have checked where you are writing. Do not close the
-Beam tab at the end of a task.
+Beam stays bound to the tab named by `use`/`open`/`nav` for this session.
+`open` keeps that tab in the session's own unfocused window and reuses it. If
+the person moves that tab elsewhere, every **write** command is refused and the
+new url is reported: re-bind with `beam use <id>` after looking at `beam tabs`.
+`--force` exists but is only for after you have checked where you are writing.
+A second session does not touch this one. Do not close the Beam tab at the end
+of a task.
 
 ## Limits
 
