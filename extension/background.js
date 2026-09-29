@@ -1020,12 +1020,12 @@ async function dispatch(cmd) {
       for (let i = 0; i < buf.length; i += 0x8000) {
         bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
       }
-      const name = cmd.name || (new URL(cmd.url).pathname.split('/').pop() || 'file');
+      const fname = cmd.name || (new URL(cmd.url).pathname.split('/').pop() || 'file');
       return page(t, {
         op: 'upload',
         target: cmd.target,
         b64: btoa(bin),
-        name: /\.[a-z0-9]{2,5}$/i.test(name) ? name : name + extFor(r.headers.get('content-type')),
+        name: /\.[a-z0-9]{2,5}$/i.test(fname) ? fname : fname + extFor(r.headers.get('content-type')),
         mime: cmd.mime || r.headers.get('content-type') || 'application/octet-stream',
         frame: cmd.frame
       });
