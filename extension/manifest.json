@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Beam — Chrome control for CLI agents",
   "short_name": "Beam",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Let your terminal and AI coding agents read and fill web pages as text, in the Chrome session you are already logged into.",
   "permissions": [
     "tabs",

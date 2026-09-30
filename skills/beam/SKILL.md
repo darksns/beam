@@ -62,7 +62,9 @@ h2 Hero
 ```
 
 `*` = required, `(hidden)` = present but not visible (fill it anyway: handy for
-closed ACF tabs), `{…}` = a select's options.
+closed ACF tabs), `{…}` = a select's options. A password field reads
+`<hidden, N chars>`: Beam can fill it but never reads the value back, in
+`snap`, `fields`, `html` or a `--dry` diff.
 
 `@n` refs last until the next `snap` or a page change; after navigating, snap
 again. For stable references use `name=` or `css=`.

@@ -18,6 +18,21 @@
     return s.length > n ? s.slice(0, n) + '…' : s;
   }
 
+  /* A password never leaves the page: Beam can type into these fields but
+     reports only that they are set, and how long the value is. A "show
+     password" toggle turns the field into type=text, so the autocomplete
+     hint counts too. */
+  function secret(el) {
+    if (!el || el.tagName.toLowerCase() !== 'input') return false;
+    if (el.type === 'password') return true;
+    return /(^|\s)(current-password|new-password|one-time-code)(\s|$)/.test(el.getAttribute('autocomplete') || '');
+  }
+
+  function hidden(v) {
+    var n = String(v == null ? '' : v).length;
+    return n ? '<hidden, ' + n + ' chars>' : '';
+  }
+
   function visible(el) {
     if (el.getClientRects().length) return true;
     /* A tab never brought to the front has no layout: getClientRects() is empty
@@ -128,7 +143,7 @@
   }
 
   function accName(el) {
-    return clean(el.getAttribute('aria-label') || el.value || el.textContent || el.getAttribute('title') || '', 70);
+    return clean(el.getAttribute('aria-label') || (secret(el) ? '' : el.value) || el.textContent || el.getAttribute('title') || '', 70);
   }
 
   var INTERACTIVE = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],' +
@@ -158,7 +173,7 @@
     for (var i = 0; i < pool.length; i++) {
       var el = pool[i];
       /* icon controls (Beaver Builder wrench) have no text, only a title */
-      var s = clean(el.value || el.textContent, 200).toLowerCase();
+      var s = clean((secret(el) ? '' : el.value) || el.textContent, 200).toLowerCase();
       if (!s) s = clean(el.getAttribute('title') || el.getAttribute('aria-label') || '', 200).toLowerCase();
       if (!s) continue;
       if (s === want) { if (!exact && visible(el)) exact = el; }
@@ -244,7 +259,8 @@
     if (lab) line += ' "' + lab + '"';
     if (/^(input|textarea|select|editable)/.test(kind)) {
       var v = valueOf(el);
-      line += ' = ' + (v ? JSON.stringify(clean(v, opts.vlen || 90)) : '""');
+      if (secret(el)) line += ' = ' + (v ? hidden(v) : '""');
+      else line += ' = ' + (v ? JSON.stringify(clean(v, opts.vlen || 90)) : '""');
       if (el.tagName.toLowerCase() === 'select' && opts.options !== false) {
         line += ' {' + Array.prototype.slice.call(el.options, 0, 12)
           .map(function (o) { return o.textContent.trim(); }).join('|') + '}';
@@ -330,6 +346,7 @@
       var el = nodes[i];
       if (el.type === 'hidden' && !opts.hidden) continue;
       if (/^(submit|button|image)$/.test(el.type)) continue;
+      var sec = secret(el);
       out.push({
         ref: '@' + ref(el),
         label: labelOf(el),
@@ -338,7 +355,9 @@
         type: ctlKind(el),
         /* whole value by default: truncating here has already caused wrong
            readings. Whoever renders the result does the cutting, if needed. */
-        value: opts.vlen ? clean(valueOf(el), opts.vlen) : valueOf(el),
+        value: sec ? null : opts.vlen ? clean(valueOf(el), opts.vlen) : valueOf(el),
+        secret: sec || undefined,
+        length: sec ? String(valueOf(el) || '').length : undefined,
         required: !!el.required,
         hidden: !visible(el),
         selector: cssPath(el)
@@ -393,6 +412,7 @@
     el.focus();
     nativeSet(el, (via && via.via) ? html : String(value));
     fireAll(el, ['input', 'change', 'blur']);
+    if (secret(el)) return { filled: hidden(value) };
     if (via && via.via) return { filled: clean(value, 60), via: 'tinymce' };
     return { filled: clean(value, 60) };
   }
@@ -630,8 +650,8 @@
             target: k,
             label: labelOf(el) || ctlKind(el),
             changed: clean(before, 1e6) !== clean(after, 1e6),
-            from: clean(before, 120),
-            to: clean(after, 120)
+            from: secret(el) ? hidden(before) : clean(before, 120),
+            to: secret(el) ? hidden(after) : clean(after, 120)
           });
         } else {
           fill(k, map[k]);
@@ -674,6 +694,13 @@
     opts = opts || {};
     var el = opts.sel ? document.querySelector(opts.sel) : document.body;
     if (!el) throw new Error('selector not found: ' + opts.sel);
+    if (el.querySelector('input[value]')) {
+      /* a value="" written in the markup would carry a password out */
+      el = el.cloneNode(true);
+      Array.prototype.forEach.call(el.querySelectorAll('input[value]'), function (i) {
+        if (secret(i)) i.setAttribute('value', hidden(i.getAttribute('value')));
+      });
+    }
     var h = el.outerHTML.replace(/<(script|style)[\s\S]*?<\/\1>/gi, '');
     return { chars: h.length, html: h.slice(0, opts.max || 30000) };
   }

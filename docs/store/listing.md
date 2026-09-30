@@ -41,6 +41,7 @@ PRIVACY AND SECURITY
 • Local only: the extension talks to a small hub on 127.0.0.1 on your own machine and nothing else. No analytics, no telemetry, no account.
 • A web page cannot drive it: the hub needs a token stored on your disk and refuses requests coming from a browser page.
 • No code injected on demand: only the scripts inside the package run, with a fixed set of operations. There is no way to run arbitrary JavaScript in a page.
+• Password fields are write-only: Beam can fill them, but only ever reports that they are set.
 • Beam works in a window of its own and refuses to write into a tab you moved elsewhere.
 • The network log (`beam network`) is off by default. Turn it on from the Beam panel if you need it: Chrome asks once, and the same button turns it off. It records method, URL, status, timing and content-type for the tab Beam drives only, in memory, with no bodies.
 
@@ -82,12 +83,14 @@ Beam lets a command-line tool running on the user's own computer read the struct
 the package (`agent.js`, `shim.js`); the commands from the local hub are data,
 passed as the argument of a fixed function.
 
-**Data usage**: what the extension reads (page structure, field values, the
-optional request log) goes only to the command-line tool on the same machine,
-through 127.0.0.1; nothing is sent to the developer or to third parties. Suggested
-answer: tick **Website content** (and **Web history** if the form counts the
-optional request log as such), then certify the three statements: not sold to
-third parties, not used or transferred for purposes unrelated to the single
+**Data usage**: the store counts data handled only on the device too. What the
+extension reads (page structure, field values, the URL and title of the tab it
+drives, the optional request log) goes only to the command-line tool on the same
+machine, through 127.0.0.1; nothing is sent to the developer or to third parties.
+Tick **Web history**, **User activity** (the optional network log) and
+**Website content**. Leave **Authentication information** unticked: password
+fields are write-only since 1.7.1. Then certify the three statements: not sold
+to third parties, not used or transferred for purposes unrelated to the single
 purpose, not used to determine creditworthiness.
 
 **Privacy policy URL**: `https://github.com/darksns/beam/blob/main/PRIVACY.md`

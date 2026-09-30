@@ -42,6 +42,10 @@ const html = `<!doctype html><html><head><title>Edit page · WP</title></head><b
   <div contenteditable="true" id="rich" aria-label="Notes">rich text</div>
   <input id="foo.bar" class="w-1/2 hover:bg-red" name="weird" value="1">
   <textarea id="content" name="content">old visual</textarea>
+  <label for="pw">Password</label>
+  <input type="password" id="pw" name="pwd" value="hunter2">
+  <label for="pw2">Shown password</label>
+  <input type="text" id="pw2" name="pwd2" autocomplete="current-password" value="s3cret-shown">
   <a href="/wp-admin/edit.php">All pages</a>
   <button id="publish" type="button">Update</button>
 </form></body></html>`;
@@ -329,6 +333,39 @@ t('title= reaches a control that is still hidden', () => {
   B.run({ op: 'click', target: 'title=Secret Settings' });
   if (hits !== 1) throw new Error('hits: ' + hits);
   return 'clicked hidden';
+});
+
+t('snap never shows a password, only that it is set', () => {
+  const r = B.run({ op: 'snap' });
+  if (/hunter2|s3cret-shown/.test(r.outline)) throw new Error('password in snap:\n' + r.outline);
+  if (!/input:password "Password" = <hidden, 7 chars>/.test(r.outline)) throw new Error('no masked line:\n' + r.outline);
+  if (!/"Shown password" = <hidden, 12 chars>/.test(r.outline)) throw new Error('autocomplete hint ignored');
+});
+
+t('fields and html keep the password out', () => {
+  const f = B.run({ op: 'fields' }).fields.find((x) => x.name === 'pwd');
+  if (f.value !== null || !f.secret || f.length !== 7) throw new Error(JSON.stringify(f));
+  const h = B.run({ op: 'html', sel: 'form' }).html;
+  if (/hunter2|s3cret-shown/.test(h)) throw new Error('password in html');
+  if (window.document.getElementById('pw').getAttribute('value') !== 'hunter2') throw new Error('the page was changed');
+});
+
+t('a password can be written, and is not echoed back', () => {
+  const dry = B.run({ op: 'set', dry: true, map: { 'label=Password': 'n3w-pass' } });
+  if (JSON.stringify(dry).indexOf('hunter2') >= 0 || JSON.stringify(dry).indexOf('n3w-pass') >= 0) throw new Error(JSON.stringify(dry));
+  const r = B.run({ op: 'fill', target: 'label=Password', value: 'n3w-pass' });
+  if (r.filled !== '<hidden, 8 chars>') throw new Error(JSON.stringify(r));
+  if (window.document.getElementById('pw').value !== 'n3w-pass') throw new Error('not written');
+});
+
+t('clicking a password field does not echo it', () => {
+  const r = B.run({ op: 'click', target: 'label=Password' });
+  if (JSON.stringify(r).indexOf('n3w-pass') >= 0) throw new Error(JSON.stringify(r));
+});
+
+t('text= does not match on a password value', () => {
+  try { B.run({ op: 'click', target: 'text=n3w-pass' }); } catch (e) { return 'refused: ' + e.message.slice(0, 40); }
+  throw new Error('a password value was usable as a target');
 });
 
 (async () => {

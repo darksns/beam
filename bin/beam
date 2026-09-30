@@ -222,7 +222,7 @@ function render(op, r) {
     return [`${r.count} fields · ${r.url}`, ''].concat(r.fields.map((f) =>
       `${f.ref} ${f.type}${f.required ? '*' : ''}${f.hidden ? ' (hidden)' : ''}  "${f.label}"` +
       `\n    name=${f.name || '—'}  sel=${f.selector}` +
-      `\n    = ${cut(f.value)}`)).join('\n');
+      `\n    = ${f.secret ? (f.length ? `<hidden, ${f.length} chars>` : '""') : cut(f.value)}`)).join('\n');
   }
   if (op === 'frames') {
     return r.map((f) => `[${f.frame}]${f.injectable ? '' : ' (not injectable)'} ${f.title || ''}\n     ${f.url}`).join('\n');

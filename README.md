@@ -211,6 +211,9 @@ by default — see [SECURITY.md](SECURITY.md) for the details and
   press **Enable network log** in the panel, and the same button takes it back.
 - Saving, publishing and submitting forms stay actions an agent asks about
   first: that rule is written into both skills.
+- Password fields are write-only: `snap`, `fields`, `html` and `set --dry`
+  report `<hidden, N chars>` instead of the value, so a password never reaches
+  the agent's context.
 
 ## Test
 

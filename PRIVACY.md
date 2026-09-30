@@ -6,7 +6,8 @@ Beam collects nothing.
   is sent to the author or to any third party, and there is no analytics or
   telemetry.
 - Page content the extension reads (structure, field values, text) is returned
-  only to the local `beam` command that asked for it.
+  only to the local `beam` command that asked for it. Password fields are never
+  read: Beam reports only that they are set, and how long the value is.
 - `network` is off until you turn it on in the Beam panel (Chrome asks for the
   `webRequest` permission then; the panel turns it off again). Once on, it keeps
   a log of the requests made by the tab Beam is driving
