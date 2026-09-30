@@ -78,9 +78,10 @@ stealing the socket from each other.
 The installer links `beam` and `beam-mdconv` into `~/.local/bin`, creates
 `~/.beam/` (hub token and site adapters) and, if Claude Code is installed, links
 the two skills into `~/.claude/skills/`. The hub starts by itself on every
-command. The toolbar icon opens a panel with the connection state, the port, the
-sessions and two buttons: **Reconnect** and **Release tab**; a red `!` on the
-icon means the connection dropped.
+command. The toolbar icon opens a panel with the connection state, an editable
+hub port, the version, the sessions, a debug dump, and two buttons: **Reconnect**
+and **Release tab**. A red `!` on the icon means the connection dropped, or that
+another copy took the hub.
 
 Requires Node 18+ and Chrome (or any Chromium with MV3 extensions).
 
@@ -100,12 +101,16 @@ different `BEAM_SESSION` names (or pass `--session`); each name gets its own
 window and tab, and will not take a tab another session owns. With no name,
 everyone shares the session `default`.
 
-Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `tabs` · `frames` · `sessions` · `network`
-Act: `open` · `focus` · `nav` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
+Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `ping` · `tabs` · `frames` · `sessions` · `network`
+Act: `open` · `focus` · `nav` · `reload` · `back` · `forward` · `close` · `use` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
 `set` · `do` · `wait` · `scroll` · `shot`
 
 Targets are `@12` (a ref from the last snap), `@3:12` (ref 12 inside frame 3),
-`css=.klass`, `text=Update`, `label=Title`, `name=post_title`.
+`css=.klass`, `text=Update`, `label=Title`, `name=post_title`, `title=Heading Settings`.
+
+The WordPress editor lives in a frame. `beam frames` lists them, `beam snap --frame all` reads every one, and `--frame <id>` writes into one.
+
+Markdown for a CMS field goes through the converter: `beam-mdconv post.md --format gutenberg|html|text [--json]`.
 
 `beam help` has the full list; `skills/beam/SKILL.md` is the reference an agent
 reads, and `skills/web-publish/` covers content work inside a CMS.
@@ -139,7 +144,8 @@ never explored twice. `examples/adapters/` has a commented one.
 ## Security
 
 Beam drives a browser that is logged into your accounts, so the doors are shut
-by default — see [SECURITY.md](SECURITY.md) for the details.
+by default — see [SECURITY.md](SECURITY.md) for the details and
+[PRIVACY.md](PRIVACY.md) for what stays on the machine.
 
 - The hub binds to `127.0.0.1`, executes nothing, and relays messages only.
 - `/cmd` requires the token in `~/.beam/token` (0600, generated on first run)
@@ -169,7 +175,8 @@ npm test
 snap, fields, fill by label/name/ref, select, check, contenteditable, bulk and
 `--dry` set, input/change events, frame-prefixed refs, the style fallback when a
 tab has no layout, outline, `do` sequences, `wait`, escaped `cssPath`, TinyMCE
-and jQuery through the page shim.
+and jQuery through the page shim, hover on a Beaver-style wrench, and `title=`
+on a control that is still hidden.
 `test/hub.test.js` starts a real hub, pretends to be the extension, and checks
 the handshake, WebSocket framing up to 200 KB payloads, that an unauthorized
 or page-originated request is refused, that a leftover copy is told it was

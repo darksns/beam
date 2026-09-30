@@ -66,6 +66,7 @@ const HELP = `beam — drive Chrome as text
     beam set '<json>' | @file.json      fill many fields at once (--dry to preview)
     beam do  '<json>' | @file.json      a sequence of steps in one round trip
     beam wait [--sel CSS] [--text T] [--timeout ms]
+    beam scroll [--sel CSS] [--by N]    scroll the page, or one element into view
     beam shot [--out file.jpg]          screenshot to a file (only when truly needed)
 
   target: @12 (ref from snap) · @3:12 (ref inside frame 3) · css=.klass · text=Update
