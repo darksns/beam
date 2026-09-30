@@ -186,6 +186,10 @@ never explored twice. `examples/adapters/` has a commented one.
   `install.sh` also links into `~/.local/bin` and `~/.claude/skills/`.
 - **Browser**: the extension acts only in the tab bound to a session, and only
   with the closed set of operations listed above.
+- **Where your data goes**: what Beam reads from a page comes back only to the
+  local CLI. What it types into a page goes to that page's own site when the
+  form is saved or submitted: the sites you point it at, in your session. The
+  skills ask before saving, publishing or submitting anything.
 
 ## Security
 
