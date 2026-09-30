@@ -49,11 +49,11 @@ Open source, MIT licensed: https://github.com/darksns/beam
 Privacy policy: https://github.com/darksns/beam/blob/main/PRIVACY.md
 ```
 
-**Screenshots** (1280×800, in this order): `1-read.png`, `2-fill.png`,
-`3-session.png`, `4-parallel.png`, `5-agents.png`
+**Screenshots** (1280×800, in this order): 1-read.png, 2-fill.png,
+3-session.png, 4-parallel.png, 5-agents.png
 
-**Small promo tile** (440×280): `promo-tile-440x280.png`
-**Marquee** (1400×560, optional): `marquee-1400x560.png`
+**Small promo tile** (440×280): promo-tile-440x280.png
+**Marquee** (1400×560, optional): marquee-1400x560.png
 
 **Official URL**: none (it needs a verified domain in Search Console)
 **Homepage URL**: `https://github.com/darksns/beam`
