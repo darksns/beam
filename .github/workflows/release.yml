@@ -21,9 +21,10 @@ jobs:
           TAG="${GITHUB_REF_NAME#v}"
           PKG=$(node -p "require('./package.json').version")
           EXT=$(node -p "require('./extension/manifest.json').version")
-          echo "tag=$TAG package.json=$PKG manifest.json=$EXT"
-          if [ "$TAG" != "$PKG" ] || [ "$TAG" != "$EXT" ]; then
-            echo "::error::version mismatch: tag $TAG, package.json $PKG, manifest.json $EXT"
+          PLUGIN=$(node -p "require('./.claude-plugin/plugin.json').version")
+          echo "tag=$TAG package.json=$PKG manifest.json=$EXT plugin.json=$PLUGIN"
+          if [ "$TAG" != "$PKG" ] || [ "$TAG" != "$EXT" ] || [ "$TAG" != "$PLUGIN" ]; then
+            echo "::error::version mismatch: tag $TAG, package.json $PKG, manifest.json $EXT, plugin.json $PLUGIN"
             exit 1
           fi
       - run: npm install --no-audit --no-fund

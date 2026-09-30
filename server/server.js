@@ -21,6 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const VERSION = require(path.join(__dirname, '..', 'package.json')).version;
 const PORT = Number(process.env.BEAM_PORT || 8777);
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const EXT_ID = process.env.BEAM_EXTENSION_ID || '';
@@ -231,7 +232,7 @@ const server = http.createServer((req, res) => {
   if (!authorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
 
   if (req.url === '/health') {
-    return json(res, 200, { ok: true, connected: !!sock, browser: sockInfo, pid: process.pid, port: PORT });
+    return json(res, 200, { ok: true, version: VERSION, connected: !!sock, browser: sockInfo, pid: process.pid, port: PORT });
   }
   if (req.method !== 'POST' || req.url !== '/cmd') return json(res, 404, { ok: false, error: 'not found' });
 

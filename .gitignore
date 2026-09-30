@@ -5,3 +5,4 @@ package-lock.json
 /adapters/
 .serena/
 dist/
+plan-to-go-live.md

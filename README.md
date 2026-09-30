@@ -45,14 +45,33 @@ repo ships two skills — but the CLI is plain Node and works on its own.
 
 ## Install
 
-From npm:
+Two parts: the CLI (with the two skills), and the Chrome extension.
+
+### As a Claude Code plugin
+
+```bash
+claude plugin marketplace add darksns/beam
+claude plugin install beam-chrome@beam
+```
+
+or, inside a session: `/plugin install beam-chrome --marketplace darksns/beam`.
+
+The plugin puts `beam` and `beam-mdconv` on the PATH of Claude's shell and
+loads the skills as `beam-chrome:beam` and `beam-chrome:web-publish`. It works
+in Claude Code only: it needs a local shell, Node 18+ and Chrome, which
+claude.ai and the mobile apps do not have. Updates: `claude plugin update beam-chrome@beam`.
+
+Then the extension (below). In the plugin's shell, `beam extension` copies it
+to `~/.beam/extension`: load that folder.
+
+### From npm, or from a clone
 
 ```bash
 npm install -g beam-chrome
 bash "$(npm root -g)/beam-chrome/install.sh"
 ```
 
-or from a clone:
+or
 
 ```bash
 git clone https://github.com/darksns/beam.git
@@ -62,13 +81,24 @@ bash install.sh
 
 The installer prints the path of the `extension/` folder to load.
 
-Then, once, in Chrome:
+Use **one** of the two ways: with both, the two skills show up twice.
+
+### The extension
+
+Once, in Chrome:
 
 1. open `chrome://extensions`
 2. turn on **Developer mode**
-3. **Load unpacked** → the `extension/` folder of this repo
+3. **Load unpacked** → the `extension/` folder (or `~/.beam/extension`, after
+   `beam extension`)
 
 Check it: `beam tabs`.
+
+An update moves the plugin to a new folder, and Chrome drops an unpacked
+extension whose folder has gone: that is why `beam extension` copies it to a
+place that stays put. After an update, `beam extension && beam reloadext`. If
+the CLI says the running hub is an older version, `beam server --stop`: the next
+command starts the new one.
 
 Load **one** copy of the extension only. If two are loaded (a leftover folder
 and this repo), the last one to connect takes the hub; the leftover panel says
@@ -140,6 +170,22 @@ never explored twice. `examples/adapters/` has a commented one.
 - One `snap` of an admin screen is ~40 lines of text instead of an image.
 - `set` and `do` perform dozens of operations in a single round trip.
 - `@n` refs avoid repeating long selectors.
+
+## What it runs and touches
+
+- **Processes**: the `beam` CLI (Node) and the hub (`server/server.js`), which
+  the CLI starts detached on the first command and leaves running. `beam server
+  --stop` stops it.
+- **Network**: the hub listens on `127.0.0.1:8777` (`BEAM_PORT` changes it) and
+  talks only to the CLI and the extension. The one outbound fetch is `upload`,
+  which downloads the URL you give it to put the file into a page. No telemetry.
+- **Files**: `~/.beam/token` (the hub token, 0600), `~/.beam/adapters/` (site
+  notes the `web-publish` skill writes), `~/.beam/extension/` (after `beam
+  extension`), screenshots from `shot` (the system temp folder, or `--out`)
+  and the `@payload.json` files you pass in.
+  `install.sh` also links into `~/.local/bin` and `~/.claude/skills/`.
+- **Browser**: the extension acts only in the tab bound to a session, and only
+  with the closed set of operations listed above.
 
 ## Security
 

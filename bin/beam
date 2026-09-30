@@ -73,7 +73,10 @@ const HELP = `beam — drive Chrome as text
           label=Title · name=post_title · title=Heading Settings
   global: --tab <id>  --session <nome>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
           BEAM_SESSION=<nome>   another name, another window; unset shares "default"
-  beam --version | -v   print the CLI version
+  setup
+    beam extension                      copy the extension to ~/.beam/extension, to load unpacked
+    beam server [--stop]                hub status, or stop it (it restarts on the next command)
+    beam --version | -v                 print the CLI version
 `;
 
 if (!op || op === 'help' || op === '--help' || op === '-h') { process.stdout.write(HELP); process.exit(0); }
@@ -99,7 +102,15 @@ async function ensureServer() {
       'It is probably an older instance: stop it (`beam server --stop`) and retry.');
     process.exit(1);
   }
-  if (h) return true;
+  if (h) {
+    /* a plugin or npm update installs the new code elsewhere, and the hub
+       started from the old copy keeps running until someone stops it */
+    if (h.version !== VERSION) {
+      console.error(`note: the running hub is ${h.version ? 'version ' + h.version : 'from an older Beam'}, ` +
+        `this CLI is ${VERSION}. \`beam server --stop\` restarts it on the next command.`);
+    }
+    return true;
+  }
   const child = spawn(process.execPath, [SERVER], { detached: true, stdio: 'ignore' });
   child.unref();
   for (let i = 0; i < 30; i++) {
@@ -243,7 +254,27 @@ function render(op, r) {
 
 /* ----------------------------------------------------------------- run */
 
+/* The extension, copied where an update does not move it: a plugin or npm
+   update installs into a new folder, and Chrome drops an unpacked extension
+   whose folder has gone. */
+function copyExtension() {
+  const src = path.join(__dirname, '..', 'extension');
+  const dest = path.join(HOME, 'extension');
+  if (fs.existsSync(path.join(dest, 'manifest.json'))) fs.rmSync(dest, { recursive: true, force: true });
+  fs.cpSync(src, dest, { recursive: true });
+  console.log(`extension ${VERSION} copied to ${dest}
+
+Once, in Chrome:
+  1. open chrome://extensions
+  2. turn on Developer mode
+  3. Load unpacked → ${dest}
+
+After an update: beam extension && beam reloadext`);
+}
+
 (async () => {
+  if (op === 'extension') { copyExtension(); return; }
+
   if (op === 'server') {
     const h = await health();
     if (opts.stop) {

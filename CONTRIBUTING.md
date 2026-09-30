@@ -63,8 +63,12 @@ any private URLs, ids or credentials.
 
 - One change per PR, with a short description of *why*.
 - Run `npm test` before opening it.
-- Bump versions only in release PRs (`package.json` and
-  `extension/manifest.json` move together).
+- Bump versions only in release PRs (`package.json`,
+  `extension/manifest.json` and `.claude-plugin/plugin.json` move together;
+  the release workflow refuses a tag they do not match).
+- If you touch `.claude-plugin/`, `skills/` or `bin/`, run
+  `claude plugin validate --strict .` too. `claude --plugin-dir .` loads the
+  working copy as the plugin for one session.
 
 ## Security issues
 

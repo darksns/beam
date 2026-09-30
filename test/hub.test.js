@@ -170,6 +170,16 @@ function beExtension(socket) {
   const health = await post('', { 'x-beam-token': token });   // 404, but authorized
   ok('an authorized request gets through', health.status !== 401, 'HTTP ' + health.status);
 
+  const ver = await new Promise((resolve) => {
+    http.get({ host: '127.0.0.1', port: PORT, path: '/health', headers: { 'x-beam-token': token } }, (res) => {
+      let b = '';
+      res.on('data', (c) => { b += c; });
+      res.on('end', () => { try { resolve(JSON.parse(b).version); } catch (e) { resolve(null); } });
+    }).on('error', () => resolve(null));
+  });
+  const pkgVersion = require('../package.json').version;
+  ok('/health reports the hub version, so the CLI can tell a stale hub', ver === pkgVersion, String(ver));
+
   for (const [op, size] of [['snap', 10], ['mid', 1000], ['big', 200000]]) {
     const r = await post(JSON.stringify({ op }), { 'content-type': 'application/json', 'x-beam-token': token });
     let parsed = {};

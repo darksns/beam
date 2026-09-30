@@ -5,7 +5,8 @@ description: Drive Chrome as text through the `beam` CLI — read a page's struc
 
 # Beam
 
-CLI: `beam` (installed in `~/.local/bin`). It talks to a local hub on
+CLI: `beam` (on the PATH: from the `beam-chrome` plugin, or linked into
+`~/.local/bin` by `install.sh`). It talks to a local hub on
 127.0.0.1:8777 that relays commands to the user's Chrome extension — so it works
 **inside the session they are already logged into**, with no credentials and no
 separate profile.
@@ -13,7 +14,10 @@ separate profile.
 The hub starts by itself on the first command. If the extension does not answer,
 the error is `extension not connected`: ask the user to open the Beam panel from
 the Chrome toolbar icon (it shows `!` when disconnected) and press
-**Reconnect**. `beam ping` returns the id, the version and the panel url.
+**Reconnect**. If Beam is not in Chrome at all, run `beam extension`: it copies
+the extension to `~/.beam/extension` and prints the three steps to load it,
+which the user does by hand. If a command prints `note: the running hub is …`,
+run `beam server --stop` once. `beam ping` returns the id, the version and the panel url.
 
 ## How to work
 
@@ -108,6 +112,7 @@ beam scroll [--sel CSS] [--by N]
 beam upload <target> <url>           # downloads a file into an input[type=file]
 beam shot [--out file.jpg]           # screenshot to a file, only when truly needed
 beam reloadext                       # reload the extension after editing it
+beam extension                       # copy the extension to ~/.beam/extension, to load unpacked
 ```
 
 **Targets**: `@12` · `css=.my-class` · `text=Update` · `label=Kicker` ·

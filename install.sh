@@ -33,8 +33,11 @@ esac
 mkdir -p "$HOME_DIR/adapters"
 echo "  ✓ $HOME_DIR ready (token and site adapters live here)"
 
-# 3. the two Claude Code skills, if Claude Code is installed
-if [ -n "${CLAUDE_SKILLS_DIR:-}" ] || [ -d "$HOME/.claude" ]; then
+# 3. the two Claude Code skills, if Claude Code is installed — unless the
+# beam-chrome plugin already brings them, or they would show up twice
+if command -v claude >/dev/null && claude plugin list 2>/dev/null | grep -q 'beam-chrome@'; then
+  echo "  · the beam-chrome plugin is installed: it already provides the skills"
+elif [ -n "${CLAUDE_SKILLS_DIR:-}" ] || [ -d "$HOME/.claude" ]; then
   mkdir -p "$SKILLS"
   for s in beam web-publish; do
     if [ -e "$SKILLS/$s" ] && [ ! -L "$SKILLS/$s" ]; then
