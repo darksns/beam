@@ -50,7 +50,8 @@ const HELP = `beam — drive Chrome as text
     beam html    [--sel CSS] [--max N]              raw HTML
     beam info | tabs | frames | sessions
     beam network [filter] [--type xhr,doc,js,css,img] [--method M] [--failed] [--last N] [--clear]
-                                                    requests of the bound tab (no bodies)
+                                                    requests of the bound tab (no bodies);
+                                                    turn it on in the Beam panel first
 
   act
     beam open <url> [--new] [--focus]   its own window, unfocused; reuses that session's tab

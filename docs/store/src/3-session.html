@@ -1,0 +1,35 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="store.css">
+<style>
+.flow{position:relative;z-index:1;margin-top:40px;display:flex;align-items:center;gap:0}
+.node{flex:1;border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:18px 18px 16px;min-height:124px}
+.node small{display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:8px}
+.node b{display:block;font:600 16px/1.3 var(--mono);color:var(--fg)}
+.node span{display:block;margin-top:6px;font-size:13.5px;color:#9aa8b5}
+.node.hi{border-color:rgba(125,249,255,.45);box-shadow:0 0 0 4px rgba(125,249,255,.06)}
+.arrow{width:34px;flex:none;text-align:center;color:var(--cyan);font-size:20px}
+.cards{position:relative;z-index:1;margin-top:30px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.card{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:22px 24px;min-height:118px}
+.card h3{font-size:17px;font-weight:600;letter-spacing:-.01em}
+.card p{margin-top:8px;font-size:15px;color:#9aa8b5}
+</style></head><body>
+<div class="glow"></div>
+<div class="brand"><img src="../../../extension/icons/icon128.png"><b>Beam</b><span>Chrome control for CLI agents</span></div>
+<h1>Works in <em>the Chrome you are already logged into</em>.</h1>
+<p class="lede">No debugging port, no second profile, no credentials to hand over. Everything stays on your machine.</p>
+<div class="flow">
+  <div class="node"><small>You or your agent</small><b>beam set …</b><span>Claude Code, any CLI, a script</span></div>
+  <div class="arrow">→</div>
+  <div class="node"><small>Local hub</small><b>127.0.0.1:8777</b><span>token-locked, relays only</span></div>
+  <div class="arrow">→</div>
+  <div class="node hi"><small>This extension</small><b>Beam</b><span>closed set of operations</span></div>
+  <div class="arrow">→</div>
+  <div class="node"><small>Your tab</small><b>your session</b><span>your cookies, your logins</span></div>
+</div>
+<div class="cards">
+  <div class="card"><h3>Local only</h3><p>The extension talks to a hub on 127.0.0.1 and nothing else. No analytics, no telemetry, no account.</p></div>
+  <div class="card"><h3>A web page cannot drive it</h3><p>The hub needs a token from your disk and refuses requests that come from a browser page.</p></div>
+  <div class="card"><h3>No code injected on demand</h3><p>Only the scripts in the package run, with a fixed set of operations: read, fill, click, select, wait.</p></div>
+  <div class="card"><h3>Its own window, one tab per session</h3><p>Beam works in a window that stays in the background, and refuses to write if you moved its tab elsewhere.</p></div>
+</div>
+<div class="foot"><span>Open source · MIT · works with Claude Code and any CLI agent</span><b>npm i -g beam-chrome</b></div>
+</body></html>

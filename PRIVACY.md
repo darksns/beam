@@ -7,12 +7,17 @@ Beam collects nothing.
   telemetry.
 - Page content the extension reads (structure, field values, text) is returned
   only to the local `beam` command that asked for it.
-- `network` keeps a log of the requests made by the tab Beam is driving
+- `network` is off until you turn it on in the Beam panel (Chrome asks for the
+  `webRequest` permission then; the panel turns it off again). Once on, it keeps
+  a log of the requests made by the tab Beam is driving
   (method, url, type, status, timing, content-type — no bodies, no headers),
   in `chrome.storage.session`: in memory, dropped when the tab closes or
   Chrome quits. Other tabs are not recorded.
-- The only other thing stored is the hub port, in `chrome.storage`. The hub token
-  lives in `~/.beam/token` on your disk.
+- Everything else the extension stores stays in the browser: the hub port in
+  `chrome.storage.local`; the tab each session drives and a short connection
+  log (shown in the panel's debug section) in `chrome.storage.session`, in
+  memory, gone when Chrome quits. The hub token lives in `~/.beam/token` on
+  your disk.
 - `upload` downloads the file at the URL you give it and puts it into a file
   input on the page you are driving; nothing else is fetched.
 

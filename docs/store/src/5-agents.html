@@ -1,0 +1,37 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="store.css">
+<style>.stage{grid-template-columns:1.25fr 1fr}pre{font-size:14.5px;line-height:1.6}
+.list{padding:18px 22px;font-size:16px;color:#c5d0da}.list p{padding:14px 0;border-bottom:1px solid var(--line)}.list p:last-child{border:0}
+.list b{color:var(--fg);font-weight:600}.list span{color:#9aa8b5}</style></head><body>
+<div class="glow"></div>
+<div class="brand"><img src="../../../extension/icons/icon128.png"><b>Beam</b><span>Chrome control for CLI agents</span></div>
+<h1>Built for <em>Claude Code</em>. Plain Node for everything else.</h1>
+<p class="lede">Install the plugin and Claude gets the CLI and two skills. Any agent with a shell can use the same commands.</p>
+<div class="stage">
+  <div class="panel"><div class="bar">Claude Code<em>plugin</em></div>
+<pre><span class="p">$ claude plugin marketplace add darksns/beam</span>
+<span class="ok">✔ Successfully added marketplace: beam</span>
+
+<span class="p">$ claude plugin install beam-chrome@beam</span>
+<span class="ok">✔ Successfully installed plugin: beam-chrome@beam</span>
+
+<span class="k">Component inventory</span>
+  Skills (2)  <span class="v">beam, web-publish</span>
+
+<span class="dim"># then, in a session:</span>
+<span class="v">&gt; Update the Linen overshirt: price 79,</span>
+<span class="v">  kicker "New for spring". Don't save.</span>
+
+<span class="dim"># or, without Claude Code:</span>
+<span class="p">$ npm i -g beam-chrome</span></pre>
+  </div>
+  <div class="panel"><div class="bar">Made for</div>
+    <div class="list">
+      <p><b>CMS data entry</b><br><span>WordPress, ACF, WooCommerce, any back-office</span></p>
+      <p><b>Filling long forms</b><br><span>from a spreadsheet, a JSON file or a brief</span></p>
+      <p><b>Checking pages</b><br><span>read what is on screen, as text, after a deploy</span></p>
+      <p><b>Structured scraping</b><br><span>in pages you are logged into</span></p>
+    </div>
+  </div>
+</div>
+<div class="foot"><span>Open source · MIT · works with Claude Code and any CLI agent</span><b>npm i -g beam-chrome</b></div>
+</body></html>

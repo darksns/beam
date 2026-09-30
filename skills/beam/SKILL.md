@@ -94,6 +94,9 @@ status >= 400, `--clear` empties the log after printing it. To see what one
 action calls: `beam network --clear`, act, then `beam network --type xhr`.
 Recording starts when a tab is bound: the very first `open` of a new Beam
 window misses its initial load, so `beam reload` if that matters.
+The log is off until the person turns it on: if `network` answers `the network
+log is off`, ask them to open the Beam panel and press **Enable network log**
+(Chrome asks once). Do not work around it.
 
 ## Acting
 

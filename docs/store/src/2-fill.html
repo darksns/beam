@@ -1,0 +1,32 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="store.css">
+<style>.stage{grid-template-columns:470px 1fr}</style></head><body>
+<div class="glow"></div>
+<div class="brand"><img src="../../../extension/icons/icon128.png"><b>Beam</b><span>Chrome control for CLI agents</span></div>
+<h1>Fill a whole form <em>in one round trip</em>, with a preview first.</h1>
+<p class="lede">Fields by label, name or ref. <code>--dry</code> shows the diff; nothing is saved until you say so.</p>
+<div class="stage">
+  <div class="panel"><div class="bar">Terminal<em>preview, then write</em></div>
+<pre><span class="p">$ beam set --dry @product.json</span>
+<span class="m">preview: 4 fields would change out of 4 resolved</span>
+
+<span class="k">~ Category</span>
+    <span class="del">- "Shirts"</span>
+    <span class="ok">+ "Outerwear"</span>
+<span class="k">~ Featured on the home page</span>
+    <span class="del">- "off"</span>
+    <span class="ok">+ "on"</span>
+<span class="k">~ Kicker</span>
+    <span class="del">- ""</span>
+    <span class="ok">+ "New for spring"</span>
+<span class="k">~ Price</span>
+    <span class="del">- "89.00"</span>
+    <span class="ok">+ "79.00"</span>
+
+<span class="p">$ beam set @product.json</span>
+<span class="ok">4 filled</span></pre>
+  </div>
+  <div class="panel page"><div class="bar">Same tab, after<em>not saved yet</em></div>
+    <img class="shot" src="page-after.jpg"></div>
+</div>
+<div class="foot"><span>Open source · MIT · works with Claude Code and any CLI agent</span><b>npm i -g beam-chrome</b></div>
+</body></html>

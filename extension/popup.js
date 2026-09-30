@@ -16,6 +16,7 @@ function paint(s) {
       : 'the local hub is not answering';
   if (!editingPort) $('port').value = s.port;
   $('ver').textContent = s.version;
+  paintNetLog(!!s.netLog);
 
   paintSessions(s.sessions);
 
@@ -186,6 +187,25 @@ $('reconnect').addEventListener('click', async () => {
 $('unbind').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'unbind' });
   refresh();
+});
+
+/* webRequest is optional: `beam network` works only after the person grants
+   it here. Chrome shows its own prompt, and the request needs this click. */
+function paintNetLog(on) {
+  $('netlog').dataset.on = on ? '1' : '';
+  $('netlog').textContent = on ? 'On · turn off' : 'Enable';
+  $('netlog').title = on
+    ? 'beam network records the requests of the tab Beam drives'
+    : 'lets beam network record the requests of the tab Beam drives';
+}
+
+$('netlog').addEventListener('click', async () => {
+  const perm = { permissions: ['webRequest'] };
+  try {
+    if ($('netlog').dataset.on) await chrome.permissions.remove(perm);
+    else await chrome.permissions.request(perm);
+  } catch (e) { /* refused, or nothing to remove */ }
+  paintNetLog(await chrome.permissions.contains(perm));
 });
 
 $('port').addEventListener('focus', () => { editingPort = true; });

@@ -234,6 +234,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         superseded,
         port,
         version: chrome.runtime.getManifest().version,
+        netLog: await netAllowed(),
         tab: home ? home.tab : null,
         tabTitle: home ? home.title : null,
         tabUrl: home ? home.url : null,
@@ -481,7 +482,7 @@ async function targetTab(cmd, name) {
     try { return await chrome.tabs.get(s.curTab); }
     catch (e) { await bind(name, null); }
   }
-  throw new Error('niente tab agganciata: beam open <url> oppure beam use <id>');
+  throw new Error('no tab bound: beam open <url>, or beam use <id>');
 }
 
 async function focusedWindowId() {
@@ -624,11 +625,19 @@ function netRow(tabId, requestId) {
   return null;
 }
 
-/* Listeners are registered synchronously, so a request wakes the worker. The
-   bind and the old log are restored first, then the event is recorded. */
+/* webRequest is an optional permission: the person turns the log on from the
+   panel, and Chrome asks once. When it is granted, the listeners are
+   registered synchronously at the top level, so a request wakes the worker;
+   the bind and the old log are restored first, then the event is recorded. */
 const netFilter = { urls: ['<all_urls>'] };
 
-chrome.webRequest.onBeforeRequest.addListener((d) => {
+/* chrome.webRequest can stay defined after the permission is taken back:
+   ask for the permission itself */
+function netAllowed() {
+  return chrome.permissions.contains({ permissions: ['webRequest'] }).catch(() => false);
+}
+
+function onNetRequest(d) {
   if (d.tabId < 0) return;
   Promise.all([bindReady, netReady]).then(() => {
     if (!ownsTab(d.tabId)) return;
@@ -644,9 +653,9 @@ chrome.webRequest.onBeforeRequest.addListener((d) => {
     if (rows.length > NET_MAX) rows.splice(0, rows.length - NET_MAX);
     saveNet();
   });
-}, netFilter);
+}
 
-chrome.webRequest.onCompleted.addListener((d) => {
+function onNetCompleted(d) {
   if (d.tabId < 0) return;
   netReady.then(() => {
     const row = netRow(d.tabId, d.requestId);
@@ -658,9 +667,9 @@ chrome.webRequest.onCompleted.addListener((d) => {
     if (ct && ct.value) row.mime = ct.value.split(';')[0].trim();
     saveNet();
   });
-}, netFilter, ['responseHeaders']);
+}
 
-chrome.webRequest.onErrorOccurred.addListener((d) => {
+function onNetError(d) {
   if (d.tabId < 0) return;
   netReady.then(() => {
     const row = netRow(d.tabId, d.requestId);
@@ -669,7 +678,33 @@ chrome.webRequest.onErrorOccurred.addListener((d) => {
     row.ms = Math.max(0, Math.round(d.timeStamp - row.t));
     saveNet();
   });
-}, netFilter);
+}
+
+/* Idempotent: the permission can be granted, taken back and granted again
+   while the same worker is alive. */
+function listenNet(on) {
+  const w = chrome.webRequest;
+  if (!w) return;
+  const pairs = [[w.onBeforeRequest, onNetRequest, []], [w.onCompleted, onNetCompleted, ['responseHeaders']],
+    [w.onErrorOccurred, onNetError, []]];
+  for (const [ev, fn, extra] of pairs) {
+    try {
+      if (on && !ev.hasListener(fn)) {
+        if (extra.length) ev.addListener(fn, netFilter, extra);
+        else ev.addListener(fn, netFilter);
+      }
+      if (!on && ev.hasListener(fn)) ev.removeListener(fn);
+    } catch (e) { /* the permission went away under us */ }
+  }
+}
+
+listenNet(true);
+chrome.permissions.onAdded.addListener((p) => {
+  if ((p.permissions || []).indexOf('webRequest') >= 0) listenNet(true);
+});
+chrome.permissions.onRemoved.addListener((p) => {
+  if ((p.permissions || []).indexOf('webRequest') >= 0) listenNet(false);
+});
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   bindReady.then(async () => {
@@ -692,6 +727,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 const NET_TYPES = { xhr: 'xmlhttprequest', fetch: 'xmlhttprequest', doc: 'main_frame', js: 'script', css: 'stylesheet', img: 'image' };
 
 async function network(tab, cmd) {
+  if (!(await netAllowed())) {
+    throw new Error('the network log is off: open the Beam panel from the Chrome toolbar and press ' +
+      '"Enable network log" (Chrome asks once)');
+  }
   await netReady;
   let rows = net[tab.id] || [];
   const total = rows.length;

@@ -48,11 +48,14 @@ admin panel you open. If you only ever drive a few sites, narrow
 `host_permissions` in `extension/manifest.json` to those domains and reload the
 extension — nothing else changes.
 
-`tabs`, `scripting`, `webNavigation`, `webRequest`, `alarms` and `storage` are
-all used: respectively to find and bind a tab, to inject the agent, to enumerate
-frames, to log the requests `beam network` reports (method, url, type, status,
-timing, content-type — no bodies, no headers), to keep the MV3 service worker
-alive, and to remember the hub port.
+`tabs`, `scripting`, `webNavigation`, `alarms` and `storage` are all used:
+respectively to find and bind a tab, to inject the agent, to enumerate frames,
+to keep the MV3 service worker alive, and to remember the hub port.
+
+`webRequest` is optional and off at install: it is granted from the panel
+(**Enable network log**), and only then does the extension log the requests
+`beam network` reports (method, url, type, status, timing, content-type — no
+bodies, no headers). The same button takes it back.
 
 ## Things Beam deliberately refuses
 

@@ -1,0 +1,33 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="store.css">
+<style>.stage{grid-template-columns:640px 1fr}</style></head><body>
+<div class="glow"></div>
+<div class="brand"><img src="../../../extension/icons/icon128.png"><b>Beam</b><span>Chrome control for CLI agents</span></div>
+<h1>Your agent reads the page <em>as text</em>, not as a screenshot.</h1>
+<p class="lede">One <code>beam snap</code>: every field, its label, its value and a short ref to act on.</p>
+<div class="stage">
+  <div class="panel page"><div class="bar">Your Chrome tab<em>logged in, as you left it</em></div>
+    <img class="shot" src="page-before.jpg"></div>
+  <div class="panel"><div class="bar">Terminal<em>11 elements · 1 round trip</em></div>
+<pre><span class="p">$ beam snap</span>
+<span class="m">Edit product · Northwind Shop
+http://127.0.0.1:8791/wp-admin/post.html
+11 elements</span>
+
+<span class="k">h1 Edit product</span>
+<span class="r">@0</span> input:text <span class="v">"Title"</span> = <span class="v">"Linen overshirt"</span>
+<span class="k">h2 Product data</span>
+<span class="r">@1</span> input:text <span class="v">"SKU"</span> = <span class="v">"LN-0142"</span>
+<span class="r">@2</span> input:text <span class="v">"Price"</span> = <span class="v">"89.00"</span>
+<span class="r">@3</span> input:text <span class="v">"Kicker"</span> = <span class="v">""</span>
+<span class="r">@4</span> textarea <span class="v">"Description"</span> = <span class="v">"Washed linen, relaxed fit."</span>
+<span class="r">@5</span> select <span class="v">"Category"</span> = <span class="v">"Shirts"</span> <span class="m">{Shirts|Outerwear|…}</span>
+<span class="r">@6</span> select <span class="v">"Season"</span> = <span class="v">"Spring/Summer"</span>
+<span class="r">@7</span> input:checkbox <span class="v">"Featured on the home page"</span> = <span class="v">"off"</span>
+<span class="k">h2 Publish</span>
+<span class="r">@8</span> select <span class="v">"Status"</span> = <span class="v">"Published"</span>
+<span class="r">@9</span> link <span class="v">"All products"</span> <span class="m">-> /wp-admin/edit.html</span>
+<span class="r">@10</span> button <span class="v">"Update"</span> <span class="m">#publish</span></pre>
+  </div>
+</div>
+<div class="foot"><span>Open source · MIT · works with Claude Code and any CLI agent</span><b>npm i -g beam-chrome</b></div>
+</body></html>

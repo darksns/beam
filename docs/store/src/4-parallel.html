@@ -1,0 +1,27 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="store.css">
+<style>.stage{grid-template-columns:1fr}</style></head><body>
+<div class="glow"></div>
+<div class="brand"><img src="../../../extension/icons/icon128.png"><b>Beam</b><span>Chrome control for CLI agents</span></div>
+<h1>Parallel agents, <em>separate windows</em>.</h1>
+<p class="lede">Each session name gets its own window and tab. <code>beam network</code> shows what a click calls.</p>
+<div class="stage" style="grid-template-rows:auto 1fr">
+  <div class="panel"><div class="bar">Two agents at once<em>BEAM_SESSION</em></div>
+<pre><span class="p">$ BEAM_SESSION=catalog beam open http://127.0.0.1:8791/wp-admin/post.html</span>
+<span class="p">$ BEAM_SESSION=orders  beam open https://example.com/</span>
+<span class="p">$ beam sessions</span>
+<span class="ok">*</span> <span class="k">catalog</span>  <span class="m">[1197221790]</span>  Edit product · Northwind Shop
+      <span class="m">http://127.0.0.1:8791/wp-admin/post.html</span>
+  <span class="k">orders</span>  <span class="m">[1197221795]</span>  Example Domain
+      <span class="m">https://example.com/</span></pre>
+  </div>
+  <div class="panel"><div class="bar">What the page calls<em>method, status, timing · no bodies</em></div>
+<pre><span class="p">$ beam network --type xhr --last 3</span>
+<span class="m">3 of 3 requests · tab 1197221790</span>
+
+<span class="ok">200</span> GET    xhr            9ms <span class="m">cache</span>  <span class="v">http://127.0.0.1:8791/wp-admin/admin-ajax.json?action=heartbeat</span>
+<span class="ok">200</span> GET    xhr            2ms <span class="m">cache</span>  <span class="v">http://127.0.0.1:8791/wp-admin/admin-ajax.json?action=heartbeat</span>
+<span class="ok">200</span> GET    xhr            3ms <span class="m">cache</span>  <span class="v">http://127.0.0.1:8791/wp-admin/admin-ajax.json?action=heartbeat</span></pre>
+  </div>
+</div>
+<div class="foot"><span>Open source · MIT · works with Claude Code and any CLI agent</span><b>npm i -g beam-chrome</b></div>
+</body></html>

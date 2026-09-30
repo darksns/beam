@@ -1,7 +1,7 @@
 {
   "name": "beam-chrome",
   "displayName": "Beam",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Drive your logged-in Chrome as text: read a page's structure, fill forms, click, navigate. No screenshots, one round trip per operation.",
   "author": { "name": "darksns", "url": "https://github.com/darksns" },
   "homepage": "https://github.com/darksns/beam#readme",

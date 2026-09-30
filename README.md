@@ -109,8 +109,8 @@ The installer links `beam` and `beam-mdconv` into `~/.local/bin`, creates
 `~/.beam/` (hub token and site adapters) and, if Claude Code is installed, links
 the two skills into `~/.claude/skills/`. The hub starts by itself on every
 command. The toolbar icon opens a panel with the connection state, an editable
-hub port, the version, the sessions, a debug dump, and two buttons: **Reconnect**
-and **Release tab**. A red `!` on the icon means the connection dropped, or that
+hub port, the version, the **network log** switch, the sessions, a debug dump,
+and two buttons: **Reconnect** and **Release tab**. A red `!` on the icon means the connection dropped, or that
 another copy took the hub.
 
 Requires Node 18+ and Chrome (or any Chromium with MV3 extensions).
@@ -207,6 +207,8 @@ by default — see [SECURITY.md](SECURITY.md) for the details and
   reports first, `--force` second.
 - The extension asks for `<all_urls>`, like any automation extension. To narrow
   it, list only the domains you need in `host_permissions`.
+- `webRequest`, which `beam network` needs, is optional: it is off until you
+  press **Enable network log** in the panel, and the same button takes it back.
 - Saving, publishing and submitting forms stay actions an agent asks about
   first: that rule is written into both skills.
 
