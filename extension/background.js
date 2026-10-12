@@ -6,8 +6,9 @@ const DEFAULT_PORT = 8777;
 let port = DEFAULT_PORT;
 let ws = null;
 let connecting = false;
-/* One slot per BEAM_SESSION. `default` is every command that names no session,
-   so a single agent keeps the old one-window behaviour. */
+/* One slot per session name. The CLI sends `default` only when nothing names
+   a session: a Claude or Cursor chat sends its chat id, so two chats do not
+   share a window. */
 let sessions = {};
 let retry = 0;
 let superseded = false; // another copy of the extension took the hub socket

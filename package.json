@@ -1,6 +1,6 @@
 {
   "name": "beam-chrome",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "Drive Chrome as text from the terminal: read a page's structure, fill forms, click, navigate. Built for CLI agents.",
   "license": "MIT",
   "author": "darksns",
@@ -17,7 +17,7 @@
     "beam-mdconv": "bin/beam-mdconv"
   },
   "scripts": {
-    "test": "node test/agent.test.js && node test/hub.test.js",
+    "test": "node test/session.test.js && node test/agent.test.js && node test/hub.test.js",
     "hub": "node server/server.js"
   },
   "devDependencies": {

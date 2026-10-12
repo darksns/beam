@@ -126,10 +126,11 @@ beam set @payload.json
 ```
 
 `open` works in a separate Chrome window that stays unfocused, and reuses one
-tab. `beam focus` brings that window forward. Two agents in parallel export
-different `BEAM_SESSION` names (or pass `--session`); each name gets its own
-window and tab, and will not take a tab another session owns. With no name,
-everyone shares the session `default`.
+tab. `beam focus` brings that window forward. A Claude Code chat and a Cursor
+chat each get their own window, from the chat id those tools already export.
+`BEAM_SESSION` (or `--session`) picks a name instead: the same name shares a
+window and tab, and will not take a tab another session owns. A terminal with
+no chat id and no name shares the session `default`.
 
 Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `ping` · `tabs` · `frames` · `sessions` · `network`
 Act: `open` · `focus` · `nav` · `reload` · `back` · `forward` · `close` · `use` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·

@@ -7,6 +7,7 @@ const os = require('os');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const pkg = require(path.join(__dirname, '..', 'package.json'));
+const { sessionOf } = require('./session-name');
 const VERSION = pkg.version;
 
 const PORT = Number(process.env.BEAM_PORT || 8777);
@@ -73,7 +74,7 @@ const HELP = `beam — drive Chrome as text
   target: @12 (ref from snap) · @3:12 (ref inside frame 3) · css=.klass · text=Update
           label=Title · name=post_title · title=Heading Settings
   global: --tab <id>  --session <nome>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
-          BEAM_SESSION=<nome>   another name, another window; unset shares "default"
+          BEAM_SESSION=<nome>   named window; unset follows the Claude/Cursor chat, else "default"
   setup
     beam extension                      copy the extension to ~/.beam/extension, to load unpacked
     beam server [--stop]                hub status, or stop it (it restarts on the next command)
@@ -174,19 +175,8 @@ function build() {
   if (cmd.newTab === 'false') cmd.newTab = false;
   if (cmd.target) splitFrame(cmd, 'target');
   if (cmd.frame === 'true') cmd.frame = 'all';
-  cmd.session = sessionOf();
+  cmd.session = sessionOf(opts.session, process.env);
   return cmd;
-}
-
-/* --session wins over BEAM_SESSION. No name is the shared "default" slot. */
-function sessionOf() {
-  if (opts.session === true) throw new Error('invalid session name');
-  const raw = opts.session != null && opts.session !== ''
-    ? String(opts.session)
-    : (process.env.BEAM_SESSION || '');
-  if (!raw) return 'default';
-  if (!/^[A-Za-z0-9._-]{1,40}$/.test(raw)) throw new Error('invalid session name: ' + raw);
-  return raw;
 }
 
 /* -------------------------------------------------------------- render */

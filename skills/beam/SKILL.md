@@ -28,8 +28,11 @@ or a widget is undecipherable from the DOM. The normal flow is:
    unfocused, and every later `open` reuses that same tab. Do not pass `--new`.
    Do not pass `--focus` unless the person asked to look at it. Do not
    `beam close` when the task is done: the window is meant to stay.
-   Two agents at once each export a different `BEAM_SESSION` before `open`.
-   The same name shares a window; no name shares `default`.
+   Two Claude Code chats already get two windows: the CLI names the session
+   from `CLAUDE_CODE_SESSION_ID` (a Cursor chat uses `CURSOR_CONVERSATION_ID`).
+   Do not export `BEAM_SESSION` unless you want a stable name, or one window
+   shared across chats. The same name shares a window. A terminal with none
+   of these set shares `default`.
 2. `beam snap` (or `beam fields`) to read the page **once**
 3. act with `set` / `do`, which do everything in a single round trip
 4. re-read only what matters (`beam snap --sel ...`) to verify
@@ -192,9 +195,12 @@ beam do --frame ID '[
 ## Parallel sessions
 
 Each `BEAM_SESSION` (or `beam --session <name>`) owns one unfocused window and
-reuses one tab inside it. Commands in one session never navigate, activate, or
-`use` a tab that belongs to another session (`--force` is the override, same
-as the tab guard). Names are `[A-Za-z0-9._-]`, up to 40 characters.
+reuses one tab inside it. With no name, a Claude Code or Cursor chat is already
+its own session, taken from the chat id. Set a name when the window should
+outlive that chat, or when two chats should share it. Commands in one session
+never navigate, activate, or `use` a tab that belongs to another session
+(`--force` is the override, same as the tab guard). Names are `[A-Za-z0-9._-]`,
+up to 40 characters.
 
 ```bash
 export BEAM_SESSION=pages
