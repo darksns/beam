@@ -18,3 +18,4 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: node test/agent.test.js
       - run: node test/hub.test.js
+      - run: node test/mcp.test.js

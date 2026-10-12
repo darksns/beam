@@ -15,13 +15,14 @@ command -v node >/dev/null || { echo "  Node.js is required. Install it and run 
 MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 [ "$MAJOR" -ge 18 ] || { echo "  Node 18+ is required (found $(node -v)): fetch() is used by the CLI."; exit 1; }
 
-chmod +x "$DIR/bin/beam" "$DIR/bin/beam-mdconv" "$DIR/server/server.js"
+chmod +x "$DIR/bin/beam" "$DIR/bin/beam-mdconv" "$DIR/bin/beam-mcp" "$DIR/server/server.js"
 
-# 1. the two commands
+# 1. the commands
 mkdir -p "$BIN"
 ln -sf "$DIR/bin/beam" "$BIN/beam"
 ln -sf "$DIR/bin/beam-mdconv" "$BIN/beam-mdconv"
-echo "  ✓ beam and beam-mdconv linked into $BIN"
+ln -sf "$DIR/bin/beam-mcp" "$BIN/beam-mcp"
+echo "  ✓ beam, beam-mdconv and beam-mcp linked into $BIN"
 
 case ":$PATH:" in
   *":$BIN:"*) ;;
