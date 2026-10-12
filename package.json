@@ -17,7 +17,7 @@
     "beam-mdconv": "bin/beam-mdconv"
   },
   "scripts": {
-    "test": "node test/session.test.js && node test/agent.test.js && node test/drag.test.js && node test/hub.test.js",
+    "test": "node test/session.test.js && node test/agent.test.js && node test/drag.test.js && node test/visual.test.js && node test/hub.test.js",
     "hub": "node server/server.js"
   },
   "devDependencies": {

@@ -776,7 +776,9 @@ function isWrite(cmd) {
 
 /* coordinates only exist on a tab that is the selected one in its window */
 function needsLayout(cmd) {
-  if (['hover', 'drag', 'drop'].indexOf(cmd.op) >= 0) return true;
+  if (['hover', 'drag', 'drop', 'rect', 'marks'].indexOf(cmd.op) >= 0) return true;
+  if (cmd.op === 'click' && (cmd.at != null || /^xy=/.test(String(cmd.target || '')))) return true;
+  if (cmd.op === 'snap' && cmd.boxes) return true;
   if (cmd.op === 'do') return (cmd.steps || []).some(needsLayout);
   return false;
 }
@@ -902,6 +904,92 @@ async function download(url, name, mime) {
     name: /\.[a-z0-9]{2,5}$/i.test(fname) ? fname : fname + extFor(r.headers.get('content-type')),
     mime: mime || r.headers.get('content-type') || 'application/octet-stream'
   };
+}
+
+/* Puts this session's tab on screen in its own window, without taking the
+   person's focus, and photographs it. */
+async function capture(t, name, cmd) {
+  return withFocus(async () => {
+    const prev = await focusedWindowId();
+    const selected = await selectWithoutFocus(t, name);
+    const shotOpts = { format: cmd.png ? 'png' : 'jpeg', quality: cmd.quality || 55 };
+    let shot = '';
+    /* only capture once this tab is the one on screen in its window,
+       otherwise we would photograph whatever the person is looking at */
+    if (selected) {
+      try { shot = await chrome.tabs.captureVisibleTab(selected.windowId, shotOpts); }
+      catch (e) { shot = ''; }
+    }
+    const own = sessions[name] && t.windowId === sessions[name].beamWindow;
+    if ((!shot || shot.length < 200) && !own) {
+      throw new Error(selected
+        ? 'screenshot failed'
+        : 'screenshot would switch a tab this session does not own');
+    }
+    if (!shot || shot.length < 200) {
+      await chrome.windows.update(t.windowId, { focused: true });
+      await chrome.tabs.update(t.id, { active: true });
+      try {
+        shot = await chrome.tabs.captureVisibleTab(t.windowId, shotOpts);
+      } finally {
+        await keepUserFocus(prev);
+      }
+    }
+    if (!shot) throw new Error('screenshot failed');
+    return shot;
+  });
+}
+
+/* Crops a capture to one element, or draws the @n labels of a snap on it.
+   Viewport pixels are scaled to the image's own: captureVisibleTab returns
+   device pixels, and the zoom level changes the ratio too. */
+async function retouch(dataUrl, vw, opts) {
+  const blob = await (await fetch(dataUrl)).blob();
+  const img = await createImageBitmap(blob);
+  const k = img.width / (vw || img.width);
+  let canvas;
+  if (opts.crop) {
+    const pad = 8 * k;
+    const sx = Math.max(0, Math.floor(opts.crop.x * k - pad));
+    const sy = Math.max(0, Math.floor(opts.crop.y * k - pad));
+    const sw = Math.min(img.width - sx, Math.ceil(opts.crop.w * k + 2 * pad));
+    const sh = Math.min(img.height - sy, Math.ceil(opts.crop.h * k + 2 * pad));
+    if (sw <= 0 || sh <= 0) throw new Error('the element is outside the visible area');
+    canvas = new OffscreenCanvas(sw, sh);
+    canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+  } else {
+    canvas = new OffscreenCanvas(img.width, img.height);
+    const g = canvas.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const font = Math.round(11 * k);
+    g.font = `bold ${font}px sans-serif`;
+    g.textBaseline = 'top';
+    for (const b of opts.boxes || []) {
+      const x = b.x * k, y = b.y * k, w = b.w * k, h = b.h * k;
+      g.lineWidth = Math.max(1, k);
+      g.strokeStyle = '#e8590c';
+      g.strokeRect(x, y, w, h);
+      const tag = '@' + b.ref;
+      const tw = g.measureText(tag).width + 4 * k;
+      /* the label sits above the box when there is room, inside it otherwise */
+      const ly = y >= font + 3 * k ? y - font - 3 * k : y;
+      g.fillStyle = '#e8590c';
+      g.fillRect(x, ly, tw, font + 3 * k);
+      g.fillStyle = '#fff';
+      g.fillText(tag, x + 2 * k, ly + 1.5 * k);
+    }
+  }
+  /* back to CSS pixels: on a retina screen the capture is twice as wide, and
+     an agent reads a picture four times the size for nothing */
+  if (k > 1 && !opts.hires) {
+    const small = new OffscreenCanvas(Math.round(canvas.width / k), Math.round(canvas.height / k));
+    const sg = small.getContext('2d');
+    sg.imageSmoothingQuality = 'high';
+    sg.drawImage(canvas, 0, 0, small.width, small.height);
+    canvas = small;
+  }
+  const out = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.75 });
+  return 'data:image/jpeg;base64,' + toB64(new Uint8Array(await out.arrayBuffer()));
 }
 
 function extFor(mime) {
@@ -1037,37 +1125,30 @@ async function dispatch(cmd) {
       return [...byId.values()].sort((a, b) => a.frame - b.frame);
     }
 
+    /* plain, cropped to one element (`shot <target>`), or with the @n refs of
+       a fresh snap drawn on it (`shot --marks`), its legend returned as text */
     case 'shot': {
       const t = await targetTab(cmd, name);
-      const data = await withFocus(async () => {
-        const prev = await focusedWindowId();
-        const selected = await selectWithoutFocus(t, name);
-        const shotOpts = { format: 'jpeg', quality: cmd.quality || 55 };
-        let shot = '';
-        /* only capture once this tab is the one on screen in its window,
-           otherwise we would photograph whatever the person is looking at */
-        if (selected) {
-          try { shot = await chrome.tabs.captureVisibleTab(selected.windowId, shotOpts); }
-          catch (e) { shot = ''; }
-        }
-        const own = sessions[name] && t.windowId === sessions[name].beamWindow;
-        if ((!shot || shot.length < 200) && !own) {
-          throw new Error(selected
-            ? 'screenshot failed'
-            : 'screenshot would switch a tab this session does not own');
-        }
-        if (!shot || shot.length < 200) {
-          await chrome.windows.update(t.windowId, { focused: true });
-          await chrome.tabs.update(t.id, { active: true });
-          try {
-            shot = await chrome.tabs.captureVisibleTab(t.windowId, shotOpts);
-          } finally {
-            await keepUserFocus(prev);
-          }
-        }
-        return shot;
-      });
-      if (!data) throw new Error('screenshot failed');
+      if ((cmd.target || cmd.marks) && cmd.frame != null) {
+        throw new Error('shot <target> and --marks work in the main frame only');
+      }
+      if (cmd.target || cmd.marks) {
+        try { await withFocus(() => selectWithoutFocus(t, name)); } catch (e) {}
+      }
+      if (cmd.target) {
+        const r = await page(t, { op: 'rect', target: cmd.target });
+        const data = await retouch(await capture(t, name, cmd), r.vw, { crop: r, hires: cmd.hires });
+        return { dataUrl: data, bytes: data.length };
+      }
+      if (cmd.marks) {
+        const m = await page(t, { op: 'marks', sel: cmd.sel, max: cmd.max });
+        const data = await retouch(await capture(t, name, cmd), m.vw, { boxes: m.boxes, hires: cmd.hires });
+        return {
+          dataUrl: data, bytes: data.length, marked: m.boxes.length,
+          title: m.title, url: m.url, elements: m.elements, outline: m.outline
+        };
+      }
+      const data = await capture(t, name, cmd);
       return { dataUrl: data, bytes: data.length };
     }
 

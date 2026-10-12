@@ -137,7 +137,8 @@ Act: `open` · `focus` · `nav` · `reload` · `back` · `forward` · `close` ·
 `drop` · `drag` · `set` · `do` · `wait` · `scroll` · `shot`
 
 Targets are `@12` (a ref from the last snap), `@3:12` (ref 12 inside frame 3),
-`css=.klass`, `text=Update`, `label=Title`, `name=post_title`, `title=Heading Settings`.
+`css=.klass`, `text=Update`, `label=Title`, `name=post_title`, `title=Heading Settings`,
+`xy=120,40` (a viewport point).
 
 ### Drag & drop
 
@@ -155,6 +156,21 @@ presses on the source first and picks HTML5 if it is, or becomes, draggable;
 `drop` builds the files (or `--text`) into a DataTransfer and drops them the way
 a desktop drag does: for dropzones with no `input[type=file]`. `upload` takes a
 local path too.
+
+### Visual pages
+
+Text first, still — but a canvas, a chart or a builder layout has no DOM to
+read, so:
+
+- `beam snap --boxes` adds `[x,y wxh]` to every line and lists `canvas`, `svg`,
+  `img`, `video` and `iframe` surfaces: a layout reads as text.
+- `beam click <target> --at x,y` clicks a point inside an element, with real
+  coordinates (a bar of a chart, a spot on a map); `xy=X,Y` targets whatever
+  is drawn at a viewport point.
+- `beam shot <target>` crops the screenshot to one element.
+- `beam shot --marks` draws the `@n` ref of every visible control on the
+  screenshot and prints the legend: what the agent sees is something it can
+  click. Both come at CSS size (`--hires` for device pixels).
 
 The WordPress editor lives in a frame. `beam frames` lists them, `beam snap --frame all` reads every one, and `--frame <id>` writes into one.
 
@@ -177,7 +193,7 @@ reads, and `skills/web-publish/` covers content work inside a CMS.
 
 The agent exposes a **closed** set of operations (snap, outline, fields, text,
 html, click, hover, fill, set, select, check, press, scroll, wait, upload, drag,
-drop, do). There is
+drop, rect, marks, do). There is
 no path to running arbitrary code in the page.
 
 **Adapters** in `~/.beam/adapters/<host>.json` are notes on how a given

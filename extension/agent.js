@@ -5,7 +5,7 @@
 (function () {
   'use strict';
   /* the version lets a newer agent replace one that is already injected */
-  var VERSION = 7;
+  var VERSION = 8;
   if (window.__beam && window.__beam.version === VERSION) return;
 
   var MAXREF = 1500;
@@ -152,10 +152,19 @@
 
   /* ------------------------------------------------------------- targets */
 
+  /* xy=120,40 is a viewport point: whatever is drawn there. It is how a canvas,
+     a map or a chart gets clicked, since none of them has a DOM to name. */
+  function xyOf(target) {
+    var m = /^xy=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/.exec(String(target == null ? '' : target).trim());
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+  }
+
   function resolve(target) {
     if (target == null) return null;
     if (typeof target === 'number') return B.refs[target] || null;
     var s = String(target).trim(), m;
+    var xy = xyOf(s);
+    if (xy) return document.elementFromPoint(xy.x, xy.y);
     if ((m = s.match(/^@(?:\d+:)?(\d+)$/))) return B.refs[Number(m[1])] || null;
     if ((m = s.match(/^css=([\s\S]+)$/))) return document.querySelector(m[1]);
     if ((m = s.match(/^text=([\s\S]+)$/))) return byText(m[1]);
@@ -271,7 +280,18 @@
     if (el.disabled) line += ' (disabled)';
     if (!visible(el)) line += ' (hidden)';
     if (el.id) line += ' #' + el.id;
+    if (opts.boxes) line += boxOf(el);
     return line;
+  }
+
+  /* " [x,y wxh]" in viewport pixels: where the control sits on screen, so a
+     layout can be reasoned about as text, and a canvas point picked (xy=) */
+  function boxOf(el) {
+    var r = null;
+    try { r = el.getBoundingClientRect(); } catch (e) {}
+    if (!r || (!r.width && !r.height)) return '';
+    return ' [' + Math.round(r.left) + ',' + Math.round(r.top) + ' ' +
+      Math.round(r.width) + 'x' + Math.round(r.height) + ']';
   }
 
   function snap(opts) {
@@ -281,14 +301,28 @@
     if (!root) throw new Error('selector not found: ' + opts.sel);
     var max = opts.max || 400;
     var out = [], count = 0, skipped = 0;
-    var sel = INTERACTIVE + (opts.headings === false ? '' : ',h1,h2,h3,h4,legend,[role=heading]');
+    var sel = INTERACTIVE + (opts.headings === false ? '' : ',h1,h2,h3,h4,legend,[role=heading]') +
+      (opts.boxes ? ',canvas,svg,img,video,iframe' : '');
     var nodes = root.querySelectorAll(sel);
 
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i];
       if (/^(H[1-4]|LEGEND)$/.test(el.tagName) || el.getAttribute('role') === 'heading') {
         var h = clean(el.textContent, 100);
-        if (h) out.push(el.tagName.toLowerCase() + ' ' + h);
+        if (h) out.push(el.tagName.toLowerCase() + ' ' + h + (opts.boxes ? boxOf(el) : ''));
+        continue;
+      }
+      /* with --boxes, the visual surfaces get a line too: they are what a
+         screenshot would be taken for, and xy= targets land inside them */
+      if (opts.boxes && /^(CANVAS|svg|IMG|VIDEO|IFRAME)$/.test(el.tagName) && !el.matches(INTERACTIVE)) {
+        /* an icon inside a button or link is already that control's line */
+        if (el.parentElement && el.parentElement.closest(INTERACTIVE + ',svg')) continue;
+        if (!visible(el)) continue;
+        if (count >= max) { skipped++; continue; }
+        count++;
+        var cap = clean(el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title') || '', 60);
+        out.push('@' + ref(el) + ' ' + el.tagName.toLowerCase() + (cap ? ' "' + cap + '"' : '') +
+          (el.id ? ' #' + el.id : '') + boxOf(el));
         continue;
       }
       if (el.type === 'hidden') continue;
@@ -620,20 +654,13 @@
     };
   }
 
-  function click(target) {
-    var el = need(target);
-    if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
-    if (typeof el.focus === 'function') { try { el.focus({ preventScroll: true }); } catch (e) {} }
-    fireAll(el, ['mousedown', 'mouseup']);
-    el.click();
-    return { clicked: clean(accName(el) || el.tagName, 60), url: location.href };
-  }
-
-  /* A point to act on: an element's center, or `at` ("x,y"), an offset
-     from its top-left corner — the top or bottom half of a row decides
-     whether a sortable puts the item before or after it. */
+  /* A point to act on: xy=X,Y as given, or an element's center. `at` ("x,y")
+     is an offset from the element's top-left corner instead of the center —
+     a spot inside a canvas, a slider's track, a cell of a drawn chart. */
   function pointFor(target, at) {
+    var xy = xyOf(target);
     var el = need(target);
+    if (xy) return { el: el, x: xy.x, y: xy.y, layout: true };
     if (typeof el.scrollIntoView === 'function') {
       try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
     }
@@ -643,6 +670,26 @@
     var r = el.getBoundingClientRect();
     if (!r.width && !r.height) return { el: el, x: 1, y: 1, layout: false };
     return { el: el, x: r.left + Number(m[1]), y: r.top + Number(m[2]), layout: true };
+  }
+
+  function click(target, at) {
+    if (!xyOf(target) && at == null) {
+      var el = need(target);
+      if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
+      if (typeof el.focus === 'function') { try { el.focus({ preventScroll: true }); } catch (e) {} }
+      fireAll(el, ['mousedown', 'mouseup']);
+      el.click();
+      return { clicked: clean(accName(el) || el.tagName, 60), url: location.href };
+    }
+    /* a point: the full pointer sequence, with coordinates, on whatever is
+       drawn there. el.click() would carry none, and a canvas needs them. */
+    var p = pointFor(target, at);
+    var hit = (p.layout && document.elementFromPoint(p.x, p.y)) || p.el;
+    if (p.el.contains(hit) === false && !xyOf(target)) hit = p.el;
+    [['pointerdown', 1], ['mousedown', 1], ['pointerup', 0], ['mouseup', 0], ['click', 0]].forEach(function (s) {
+      hit.dispatchEvent(mouseEvt(s[0], p.x, p.y, null, s[1]));
+    });
+    return { clicked: clean(accName(hit) || hit.tagName, 60), x: Math.round(p.x), y: Math.round(p.y), layout: p.layout, url: location.href };
   }
 
   /* --------------------------------------------------------- drag & drop */
@@ -870,15 +917,55 @@
     return { y: window.scrollY, height: document.body.scrollHeight };
   }
 
+  /* --------------------------------------------------------------- visual */
+
+  /* Where an element is on screen, for `shot <target>` to crop to it. */
+  function rect(cmd) {
+    var el = need(cmd.target);
+    /* instant: a smooth-scrolling page would still be moving at the capture */
+    if (typeof el.scrollIntoView === 'function') {
+      try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+    }
+    var r = el.getBoundingClientRect();
+    if (!r.width && !r.height) throw new Error('the element has no size on screen: ' + cmd.target);
+    return {
+      x: r.left, y: r.top, w: r.width, h: r.height,
+      dpr: window.devicePixelRatio || 1,
+      vw: window.innerWidth, vh: window.innerHeight
+    };
+  }
+
+  /* `shot --marks`: a fresh snap, plus the box of every ref that is on screen,
+     so the service worker can draw the @n labels onto the screenshot. What
+     the agent sees in the picture is then a ref it can act on. */
+  function marks(cmd) {
+    var s = snap({ sel: cmd.sel, max: cmd.max, boxes: true });
+    var vw = window.innerWidth, vh = window.innerHeight, boxes = [];
+    for (var i = 0; i < B.refs.length; i++) {
+      var r = B.refs[i].getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (r.right < 0 || r.bottom < 0 || r.left > vw || r.top > vh) continue;
+      if (!visible(B.refs[i])) continue;
+      boxes.push({ ref: i, x: r.left, y: r.top, w: r.width, h: r.height });
+    }
+    s.boxes = boxes;
+    s.dpr = window.devicePixelRatio || 1;
+    s.vw = vw;
+    s.vh = vh;
+    return s;
+  }
+
   /* ---------------------------------------------------------------- run */
 
   var OPS = {
     info: function () { return { url: location.href, title: document.title, ready: document.readyState }; },
     snap: snap, outline: outline, fields: fields, text: text, html: html,
-    click: function (c) { return click(c.target); },
+    click: function (c) { return click(c.target, c.at); },
     hover: function (c) { return hover(c.target); },
     drag: drag,
     drop: drop,
+    rect: rect,
+    marks: marks,
     fill: function (c) { return fill(c.target, c.value); },
     set: function (c) { return setMany(c.map || {}, !!c.dry); },
     select: function (c) { return select(c.target, c.value); },
