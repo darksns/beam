@@ -134,10 +134,27 @@ no chat id and no name shares the session `default`.
 
 Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `ping` · `tabs` · `frames` · `sessions` · `network`
 Act: `open` · `focus` · `nav` · `reload` · `back` · `forward` · `close` · `use` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
-`set` · `do` · `wait` · `scroll` · `shot`
+`drop` · `drag` · `set` · `do` · `wait` · `scroll` · `shot`
 
 Targets are `@12` (a ref from the last snap), `@3:12` (ref 12 inside frame 3),
 `css=.klass`, `text=Update`, `label=Title`, `name=post_title`, `title=Heading Settings`.
+
+### Drag & drop
+
+```bash
+beam drag "css=#items li:nth-child(4)" "css=#items li:nth-child(1)"   # reorder
+beam drag "css=.menu-item-handle" "css=#menu-item-12" --at 40,30      # a point inside the target
+beam drop "css=.dropzone" ./photo.jpg https://example.com/doc.pdf     # files from disk or a url
+```
+
+`drag` speaks both families a page can use: HTML5 drag events (SortableJS,
+Gutenberg, `draggable=true`) and pointer-driven sorting (jQuery UI — the
+WordPress menu editor, ACF repeaters — dnd-kit, react-beautiful-dnd). `auto`
+presses on the source first and picks HTML5 if it is, or becomes, draggable;
+`--mode html5|mouse` forces one. It reports when nothing accepted the drop.
+`drop` builds the files (or `--text`) into a DataTransfer and drops them the way
+a desktop drag does: for dropzones with no `input[type=file]`. `upload` takes a
+local path too.
 
 The WordPress editor lives in a frame. `beam frames` lists them, `beam snap --frame all` reads every one, and `--frame <id>` writes into one.
 
@@ -159,7 +176,8 @@ reads, and `skills/web-publish/` covers content work inside a CMS.
 | panel | `extension/popup.html` · `popup.js` | connection state and quick commands |
 
 The agent exposes a **closed** set of operations (snap, outline, fields, text,
-html, click, hover, fill, set, select, check, press, scroll, wait, upload, do). There is
+html, click, hover, fill, set, select, check, press, scroll, wait, upload, drag,
+drop, do). There is
 no path to running arbitrary code in the page.
 
 **Adapters** in `~/.beam/adapters/<host>.json` are notes on how a given

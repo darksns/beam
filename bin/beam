@@ -64,7 +64,11 @@ const HELP = `beam — drive Chrome as text
     beam select <target> <value>
     beam check <target> [on|off]
     beam press <Key>
-    beam upload <target> <url>          download a file into an input[type=file]
+    beam upload <target> <url|file>     a file into an input[type=file]
+    beam drop <target> <url|file>... [--text T] [--at x,y]
+                                        drop files (or text) onto a dropzone
+    beam drag <target> <to> [--at x,y] [--from x,y] [--mode auto|html5|mouse] [--steps N]
+                                        drag an element onto another (sort, move)
     beam set '<json>' | @file.json      fill many fields at once (--dry to preview)
     beam do  '<json>' | @file.json      a sequence of steps in one round trip
     beam wait [--sel CSS] [--text T] [--timeout ms]
@@ -125,6 +129,28 @@ async function ensureServer() {
 
 /* ------------------------------------------------------------ commands */
 
+/* A local file, sent as bytes: the extension cannot read the disk. The hub
+   takes 20 MB of JSON, and base64 grows by a third. */
+const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.avif': 'image/avif', '.svg': 'image/svg+xml', '.pdf': 'application/pdf',
+  '.txt': 'text/plain', '.csv': 'text/csv', '.json': 'application/json', '.zip': 'application/zip',
+  '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+
+function localFile(p) {
+  const st = fs.statSync(p);
+  if (!st.isFile()) throw new Error('not a file: ' + p);
+  if (st.size > 14e6) throw new Error('file too large to send through the hub (14 MB max): ' + p);
+  return {
+    b64: fs.readFileSync(p).toString('base64'),
+    name: path.basename(p),
+    mime: MIME[path.extname(p).toLowerCase()] || 'application/octet-stream'
+  };
+}
+
+const isUrl = (v) => /^(https?|data):/i.test(String(v || ''));
+
 function readArg(v) {
   if (typeof v === 'string' && v.startsWith('@') && v.length > 1 && !/^@\d+$/.test(v)) {
     return fs.readFileSync(v.slice(1), 'utf8');
@@ -149,6 +175,12 @@ function build() {
     case 'open': case 'nav': cmd.url = positional[0]; break;
     case 'use': cmd.tab = positional[0]; break;
     case 'click': case 'hover': cmd.target = positional[0]; break;
+    case 'drag': cmd.target = positional[0]; cmd.to = positional[1]; break;
+    case 'drop':
+      cmd.target = positional[0];
+      cmd.urls = positional.slice(1).filter(isUrl);
+      cmd.files = positional.slice(1).filter((p) => !isUrl(p)).map(localFile);
+      break;
     case 'fill': case 'select':
       cmd.target = positional[0];
       cmd.value = positional.slice(1).join(' ');
@@ -158,7 +190,11 @@ function build() {
       cmd.value = positional[1] === undefined ? true : !/^(off|false|0|no)$/i.test(positional[1]);
       break;
     case 'press': cmd.key = positional[0]; break;
-    case 'upload': cmd.target = positional[0]; cmd.url = positional[1]; break;
+    case 'upload':
+      cmd.target = positional[0];
+      if (isUrl(positional[1])) cmd.url = positional[1];
+      else Object.assign(cmd, localFile(positional[1]), opts.name ? { name: opts.name } : {});
+      break;
     case 'set': cmd.map = JSON.parse(readArg(positional[0])); break;
     case 'do': {
       const parsed = JSON.parse(readArg(positional[0]));
@@ -174,6 +210,11 @@ function build() {
   }
   if (cmd.newTab === 'false') cmd.newTab = false;
   if (cmd.target) splitFrame(cmd, 'target');
+  if (cmd.to) splitFrame(cmd, 'to');
+  /* `text --from N` is an offset; on a drag, --from is a point */
+  if (/^(drag|drop)$/.test(op) && (typeof cmd.at === 'number' || typeof cmd.from === 'number')) {
+    throw new Error('--at and --from want x,y');
+  }
   if (cmd.frame === 'true') cmd.frame = 'all';
   cmd.session = sessionOf(opts.session, process.env);
   return cmd;
@@ -226,6 +267,15 @@ function render(op, r) {
       return `${st.padEnd(3)} ${q.method.padEnd(6)} ${type.padEnd(10)} ${ms.padStart(7)}${q.cache ? ' cache' : ''}  ${q.url}` +
         (q.error ? `\n    ${q.error}` : '');
     })).join('\n').trimEnd();
+  }
+  if (op === 'drag') {
+    return `dragged ${r.dragged} → ${r.to} · ${r.mode}` +
+      (r.accepted === false ? '\nthe target did not accept the drop (it never cancelled dragover)' : '') +
+      (r.note ? '\n' + r.note : '');
+  }
+  if (op === 'drop') {
+    return `dropped ${r.dropped} on ${r.on}` +
+      (r.accepted ? '' : '\nthe target did not accept it (no handler cancelled dragover or drop): try the zone itself, or the page body');
   }
   if (op === 'upload') return `${r.uploaded} · ${Math.round(r.bytes / 1024)} KB · ${r.type}`;
   if (op === 'do') {

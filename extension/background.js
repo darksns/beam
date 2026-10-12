@@ -766,7 +766,7 @@ async function network(tab, cmd) {
 /* ----------------------------------------------------------------- inject */
 
 const READ_OPS = ['info', 'snap', 'outline', 'fields', 'text', 'html'];
-const WRITE_OPS = ['click', 'hover', 'fill', 'set', 'select', 'check', 'press', 'upload'];
+const WRITE_OPS = ['click', 'hover', 'fill', 'set', 'select', 'check', 'press', 'upload', 'drag', 'drop'];
 
 function isWrite(cmd) {
   if (WRITE_OPS.indexOf(cmd.op) >= 0) return true;
@@ -774,8 +774,9 @@ function isWrite(cmd) {
   return false;
 }
 
+/* coordinates only exist on a tab that is the selected one in its window */
 function needsLayout(cmd) {
-  if (cmd.op === 'hover') return true;
+  if (['hover', 'drag', 'drop'].indexOf(cmd.op) >= 0) return true;
   if (cmd.op === 'do') return (cmd.steps || []).some(needsLayout);
   return false;
 }
@@ -879,6 +880,28 @@ async function page(tab, cmd) {
     };
   }
   return parts.map((p) => ({ frame: p.frame, result: p.data }));
+}
+
+function toB64(buf) {
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
+/* the service worker does the fetch: it has the host permissions and is not
+   subject to the page's CORS. The bytes reach the agent as base64. */
+async function download(url, name, mime) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('download failed: HTTP ' + r.status + ' ' + url);
+  const buf = new Uint8Array(await r.arrayBuffer());
+  const fname = name || (new URL(url).pathname.split('/').pop() || 'file');
+  return {
+    b64: toB64(buf),
+    name: /\.[a-z0-9]{2,5}$/i.test(fname) ? fname : fname + extFor(r.headers.get('content-type')),
+    mime: mime || r.headers.get('content-type') || 'application/octet-stream'
+  };
 }
 
 function extFor(mime) {
@@ -1048,27 +1071,23 @@ async function dispatch(cmd) {
       return { dataUrl: data, bytes: data.length };
     }
 
-    /* the service worker does the fetch: it has the host permissions and is
-       not subject to the page's CORS. The bytes reach the agent as base64. */
     case 'upload': {
       const t = await targetTab(cmd, name);
       guardUrl(t, cmd, name);
-      const r = await fetch(cmd.url);
-      if (!r.ok) throw new Error('download failed: HTTP ' + r.status + ' ' + cmd.url);
-      const buf = new Uint8Array(await r.arrayBuffer());
-      let bin = '';
-      for (let i = 0; i < buf.length; i += 0x8000) {
-        bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-      }
-      const fname = cmd.name || (new URL(cmd.url).pathname.split('/').pop() || 'file');
-      return page(t, {
-        op: 'upload',
-        target: cmd.target,
-        b64: btoa(bin),
-        name: /\.[a-z0-9]{2,5}$/i.test(fname) ? fname : fname + extFor(r.headers.get('content-type')),
-        mime: cmd.mime || r.headers.get('content-type') || 'application/octet-stream',
-        frame: cmd.frame
-      });
+      const f = cmd.b64 ? { b64: cmd.b64, name: cmd.name, mime: cmd.mime } : await download(cmd.url, cmd.name, cmd.mime);
+      return page(t, Object.assign({ op: 'upload', target: cmd.target, frame: cmd.frame }, f));
+    }
+
+    /* files from a url (fetched here) or from disk (the CLI sends the bytes) */
+    case 'drop': {
+      const t = await targetTab(cmd, name);
+      guardUrl(t, cmd, name);
+      const files = (cmd.files || []).slice();
+      for (const u of cmd.urls || []) files.push(await download(u, null, null));
+      try { await withFocus(() => selectWithoutFocus(t, name)); } catch (e) {}
+      const r = await page(t, { op: 'drop', target: cmd.target, at: cmd.at, text: cmd.text, files, frame: cmd.frame });
+      try { await bindUrl(name, (await chrome.tabs.get(t.id)).url); } catch (e) {}
+      return r;
     }
 
     case 'network':

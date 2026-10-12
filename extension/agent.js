@@ -5,7 +5,7 @@
 (function () {
   'use strict';
   /* the version lets a newer agent replace one that is already injected */
-  var VERSION = 6;
+  var VERSION = 7;
   if (window.__beam && window.__beam.version === VERSION) return;
 
   var MAXREF = 1500;
@@ -454,7 +454,7 @@
     return { x: r.left + r.width / 2, y: r.top + r.height / 2, layout: true };
   }
 
-  function mouseEvt(type, x, y, related) {
+  function mouseEvt(type, x, y, related, buttons) {
     var enter = type === 'mouseenter' || type === 'pointerenter';
     var PE = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
     var Ctor = type.indexOf('pointer') === 0 ? PE : MouseEvent;
@@ -468,7 +468,7 @@
       screenY: y,
       relatedTarget: related || null,
       button: 0,
-      buttons: 0
+      buttons: buttons || 0
     };
     if (Ctor !== MouseEvent) {
       init.pointerId = 1;
@@ -629,6 +629,147 @@
     return { clicked: clean(accName(el) || el.tagName, 60), url: location.href };
   }
 
+  /* A point to act on: an element's center, or `at` ("x,y"), an offset
+     from its top-left corner — the top or bottom half of a row decides
+     whether a sortable puts the item before or after it. */
+  function pointFor(target, at) {
+    var el = need(target);
+    if (typeof el.scrollIntoView === 'function') {
+      try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+    }
+    var m = at != null && /^(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/.exec(String(at).trim());
+    if (at != null && !m) throw new Error('--at wants x,y in pixels from the top-left corner: ' + at);
+    if (!m) { var c = pointOf(el); c.el = el; return c; }
+    var r = el.getBoundingClientRect();
+    if (!r.width && !r.height) return { el: el, x: 1, y: 1, layout: false };
+    return { el: el, x: r.left + Number(m[1]), y: r.top + Number(m[2]), layout: true };
+  }
+
+  /* --------------------------------------------------------- drag & drop */
+
+  /* DragEvent with a DataTransfer where the browser has them; elsewhere a
+     MouseEvent carrying the same dataTransfer property, which is all a
+     listener reads. */
+  function dragEvt(type, x, y, dt) {
+    var init = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, screenX: x, screenY: y, buttons: 1 };
+    var ev = null;
+    if (typeof DragEvent === 'function') {
+      try { init.dataTransfer = dt; ev = new DragEvent(type, init); } catch (e) { ev = null; }
+    }
+    if (!ev) ev = new MouseEvent(type, init);
+    if (ev.dataTransfer !== dt) {
+      try { Object.defineProperty(ev, 'dataTransfer', { value: dt }); } catch (e) {}
+    }
+    return ev;
+  }
+
+  function newTransfer() {
+    if (typeof DataTransfer === 'function') return new DataTransfer();
+    throw new Error('this page has no DataTransfer: drag & drop is not available here');
+  }
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  /* Two families of drag exist, and a page uses one or the other:
+     - HTML5 (draggable=true, SortableJS, Gutenberg, most file dropzones):
+       dragstart → dragenter/dragover → drop → dragend, sharing a DataTransfer;
+     - pointer-driven (jQuery UI sortable, ACF repeaters, menus, dnd-kit,
+       react-beautiful-dnd): mousedown, several mousemoves, mouseup.
+     `auto` picks HTML5 when the source sits in a [draggable=true]. */
+  function drag(cmd) {
+    var s = pointFor(cmd.target, cmd.from);
+    var d = pointFor(cmd.to, cmd.at);
+    if (!s.layout || !d.layout) {
+      throw new Error('no layout on this tab: drag needs real coordinates — `beam open` the page in Beam\'s window');
+    }
+    if (cmd.mode && !/^(auto|html5|mouse)$/.test(cmd.mode)) throw new Error('--mode is html5, mouse or auto: ' + cmd.mode);
+    /* the press comes first, in both families: SortableJS only sets
+       draggable=true on the item once the pointer is down on it */
+    s.el.dispatchEvent(mouseEvt('pointerdown', s.x, s.y, null, 1));
+    s.el.dispatchEvent(mouseEvt('mousedown', s.x, s.y, null, 1));
+    var handle = s.el.closest ? s.el.closest('[draggable="true"]') : null;
+    var mode = cmd.mode && cmd.mode !== 'auto' ? cmd.mode : (handle ? 'html5' : 'mouse');
+    var steps = Math.max(2, Math.min(Number(cmd.steps) || 12, 60));
+    var label = {
+      dragged: clean(accName(s.el) || s.el.tagName, 50),
+      to: clean(accName(d.el) || d.el.tagName, 50),
+      mode: mode
+    };
+
+    if (mode === 'html5') {
+      var src = handle || s.el;
+      var dt = newTransfer();
+      var started = src.dispatchEvent(dragEvt('dragstart', s.x, s.y, dt));
+      if (!started) return Object.assign(label, { accepted: false, note: 'the page cancelled dragstart' });
+      var last = null, accepted = false;
+      return (function move(i) {
+        if (i > steps) return Promise.resolve();
+        var x = s.x + (d.x - s.x) * i / steps, y = s.y + (d.y - s.y) * i / steps;
+        var over = document.elementFromPoint(x, y) || d.el;
+        if (over !== last) {
+          if (last) last.dispatchEvent(dragEvt('dragleave', x, y, dt));
+          over.dispatchEvent(dragEvt('dragenter', x, y, dt));
+          last = over;
+        }
+        src.dispatchEvent(dragEvt('drag', x, y, dt));
+        /* a drop target says yes by cancelling dragover */
+        accepted = !over.dispatchEvent(dragEvt('dragover', x, y, dt));
+        return sleep(16).then(function () { return move(i + 1); });
+      })(1).then(function () {
+        var at = last || d.el;
+        if (accepted) at.dispatchEvent(dragEvt('drop', d.x, d.y, dt));
+        else at.dispatchEvent(dragEvt('dragleave', d.x, d.y, dt));
+        src.dispatchEvent(dragEvt('dragend', d.x, d.y, dt));
+        return Object.assign(label, { accepted: accepted });
+      });
+    }
+
+    var under = s.el;
+    return (function move(i) {
+      if (i > steps) return Promise.resolve();
+      var x = s.x + (d.x - s.x) * i / steps, y = s.y + (d.y - s.y) * i / steps;
+      under = document.elementFromPoint(x, y) || under;
+      under.dispatchEvent(mouseEvt('pointermove', x, y, null, 1));
+      under.dispatchEvent(mouseEvt('mousemove', x, y, null, 1));
+      return sleep(16).then(function () { return move(i + 1); });
+    })(1).then(function () {
+      var end = document.elementFromPoint(d.x, d.y) || d.el;
+      end.dispatchEvent(mouseEvt('pointerup', d.x, d.y, null, 0));
+      end.dispatchEvent(mouseEvt('mouseup', d.x, d.y, null, 0));
+      return label;
+    });
+  }
+
+  /* Files (bytes fetched by the service worker or read by the CLI) or text,
+     dropped onto a target as if dragged in from the desktop: the dropzones
+     that have no input[type=file] to upload into. */
+  function drop(cmd) {
+    var p = pointFor(cmd.target, cmd.at);
+    var el = p.el;
+    var dt = newTransfer();
+    var names = [];
+    (cmd.files || []).forEach(function (f) {
+      var bin = atob(f.b64);
+      var buf = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      dt.items.add(new File([buf], f.name, { type: f.mime || 'application/octet-stream' }));
+      names.push(f.name);
+    });
+    if (cmd.text != null) dt.setData('text/plain', String(cmd.text));
+    if (!names.length && cmd.text == null) throw new Error('nothing to drop: give a file or --text');
+    /* the page-wide dragenter is what makes most dropzones appear */
+    if (document.body && document.body !== el) document.body.dispatchEvent(dragEvt('dragenter', p.x, p.y, dt));
+    el.dispatchEvent(dragEvt('dragenter', p.x, p.y, dt));
+    var accepted = !el.dispatchEvent(dragEvt('dragover', p.x, p.y, dt));
+    var taken = !el.dispatchEvent(dragEvt('drop', p.x, p.y, dt));
+    return {
+      dropped: names.length ? names.join(', ') : clean(cmd.text, 40),
+      on: clean(accName(el) || el.tagName, 50),
+      /* a target that never cancels dragover or drop most likely ignored it */
+      accepted: accepted || taken
+    };
+  }
+
   function press(key, target) {
     var el = target ? need(target) : (document.activeElement || document.body);
     ['keydown', 'keypress', 'keyup'].forEach(function (t) {
@@ -736,6 +877,8 @@
     snap: snap, outline: outline, fields: fields, text: text, html: html,
     click: function (c) { return click(c.target); },
     hover: function (c) { return hover(c.target); },
+    drag: drag,
+    drop: drop,
     fill: function (c) { return fill(c.target, c.value); },
     set: function (c) { return setMany(c.map || {}, !!c.dry); },
     select: function (c) { return select(c.target, c.value); },
