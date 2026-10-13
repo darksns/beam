@@ -19,3 +19,4 @@ jobs:
       - run: node test/agent.test.js
       - run: node test/drag.test.js
       - run: node test/hub.test.js
+      - run: node test/mcp.test.js

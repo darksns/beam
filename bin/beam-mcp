@@ -1,0 +1,222 @@
+#!/usr/bin/env node
+/* beam-mcp — Beam as an MCP server (stdio), for clients that have no shell:
+ * Claude Desktop, Cursor, VS Code, Windsurf, Zed…
+ *
+ * A thin adapter over the `beam` CLI: every tool runs `bin/beam` with an
+ * argument list (never through a shell), so the text that comes back is the
+ * same the skill documents, and the hub, token and session rules stay where
+ * they are. JSON-RPC 2.0, one message per line, no dependencies. */
+'use strict';
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
+const { execFile } = require('child_process');
+const pkg = require(path.join(__dirname, '..', 'package.json'));
+
+const CLI = path.join(__dirname, 'beam');
+const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+
+/* An MCP client starts one server for many chats and exports no chat id: the
+   window is named `mcp` unless BEAM_SESSION says otherwise. */
+const SESSION = process.env.BEAM_SESSION || 'mcp';
+
+const INSTRUCTIONS = `Beam drives the user's own Chrome, logged into their accounts, as text.
+Flow: beam_open a url once (Beam's own unfocused window, reused) → beam_snap or beam_fields to read
+the page once → act with beam_set / beam_do, which do many things in one call → re-read only what
+matters. Targets: @12 (ref from the last snap), css=…, text=…, label=…, name=…, title=….
+Refs die on the next snap or navigation. Prefer text tools; beam_shot only when the user wants
+a visual check or a widget cannot be read from the DOM.
+Rules: never type credentials (if a login form shows, ask the user to log in); preview bulk writes
+with beam_set dry:true; ask the user before saving, publishing, submitting or deleting anything.
+If a call says "extension not connected", ask the user to open the Beam panel in Chrome.`;
+
+/* ---------------------------------------------------------------- tools */
+
+const S = (props, required) => ({ type: 'object', properties: props, required: required || [], additionalProperties: false });
+const str = (d) => ({ type: 'string', description: d });
+const num = (d) => ({ type: 'number', description: d });
+const bool = (d) => ({ type: 'boolean', description: d });
+const TARGET = str('@12 · @3:12 · css=… · text=… · label=… · name=… · title=…');
+const FRAME = { type: ['number', 'string'], description: 'frame id from `frames` (reads also take "all")' };
+const RO = { readOnlyHint: true, openWorldHint: true };
+const RW = { readOnlyHint: false, destructiveHint: false, openWorldHint: true };
+
+const TOOLS = [
+  { name: 'beam_open', title: 'Open a url',
+    description: 'Open a url in Beam\'s own Chrome window (unfocused, the same tab is reused).',
+    inputSchema: S({ url: str('the url'), focus: bool('bring the window forward') }, ['url']), annotations: RW,
+    args: (a) => ['open', a.url].concat(a.focus ? ['--focus'] : []) },
+
+  { name: 'beam_snap', title: 'Read the page',
+    description: 'The interactive elements of the bound tab, one per line, with @n refs to act on.',
+    inputSchema: S({ sel: str('CSS scope'), max: num('max elements (400)'), hidden: bool('include hidden ones'),
+      frame: FRAME }), annotations: RO,
+    args: (a) => ['snap'].concat(flags(a, ['sel', 'max', 'frame']), bools(a, ['hidden'])) },
+
+  { name: 'beam_fields', title: 'Read the form fields',
+    description: 'Every form field: label, name, selector and whole value. The map for beam_set.',
+    inputSchema: S({ sel: str('CSS scope'), hidden: bool('include type=hidden'), frame: FRAME }), annotations: RO,
+    args: (a) => ['fields'].concat(flags(a, ['sel', 'frame']), bools(a, ['hidden'])) },
+
+  { name: 'beam_text', title: 'Read the text',
+    description: 'The readable text of the page, or of one element.',
+    inputSchema: S({ sel: str('CSS scope'), max: num('characters (20000)'), from: num('offset'), frame: FRAME }), annotations: RO,
+    args: (a) => ['text'].concat(flags(a, ['sel', 'max', 'from', 'frame'])) },
+
+  { name: 'beam_set', title: 'Fill many fields',
+    description: 'Fill many fields in one call: {"<target>": "<value>", …}. dry:true previews the diff and writes nothing.',
+    inputSchema: S({ map: { type: 'object', description: 'target → value', additionalProperties: true },
+      dry: bool('preview only'), frame: FRAME }, ['map']), annotations: RW,
+    args: (a) => ['set', JSON.stringify(a.map)].concat(flags(a, ['frame']), bools(a, ['dry'])) },
+
+  { name: 'beam_do', title: 'Run a sequence',
+    description: 'Several steps in one round trip, e.g. [{"op":"click","target":"text=Tab"},{"op":"wait","sel":".x"},' +
+      '{"op":"fill","target":"label=Title","value":"…"}]. Ops: click hover fill set select check press wait scroll ' +
+      'snap fields text. "optional":true on a step that may fail.',
+    inputSchema: S({ steps: { type: 'array', items: { type: 'object' } }, frame: FRAME }, ['steps']), annotations: RW,
+    args: (a) => ['do', JSON.stringify(a.steps)].concat(flags(a, ['frame'])) },
+
+  { name: 'beam_click', title: 'Click',
+    description: 'Click a target.',
+    inputSchema: S({ target: TARGET, frame: FRAME }, ['target']), annotations: RW,
+    args: (a) => ['click', a.target].concat(flags(a, ['frame'])) },
+
+  { name: 'beam_fill', title: 'Fill one field',
+    description: 'Type a value into one field (input, textarea, TinyMCE, contenteditable).',
+    inputSchema: S({ target: TARGET, value: str('the value'), frame: FRAME }, ['target', 'value']), annotations: RW,
+    args: (a) => ['fill', a.target, String(a.value)].concat(flags(a, ['frame'])) },
+
+  { name: 'beam_shot', title: 'Screenshot',
+    description: 'A screenshot of the bound tab, returned as an image. Only when the user wants a visual ' +
+      'check or the page cannot be read as text.',
+    inputSchema: S({}), annotations: RO,
+    shot: true,
+    args: () => ['shot'] },
+
+  { name: 'beam_command', title: 'Any other beam command',
+    description: 'Any other `beam` command, as its argument list: ["nav","<url>"], ["reload"], ["back"], ' +
+      '["hover","css=.x"], ["select","label=Status","Draft"], ["check","name=x","off"], ["press","Enter"], ' +
+      '["wait","--text","Saved"], ["scroll","--by","600"], ["upload","<target>","<url>"], ["frames"], ' +
+      '["tabs"], ["outline"], ["html","--sel","main"], ["info"], ["network","--type","xhr"], ["sessions"].',
+    inputSchema: S({ args: { type: 'array', items: { type: 'string' } } }, ['args']), annotations: RW,
+    args: (a) => a.args }
+];
+
+function flags(a, keys) {
+  const out = [];
+  for (const k of keys) if (a[k] != null && a[k] !== '') out.push('--' + k, String(a[k]));
+  return out;
+}
+function bools(a, keys) { return keys.filter((k) => a[k] === true).map((k) => '--' + k); }
+
+/* ------------------------------------------------------------------ run */
+
+function beam(args) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [CLI].concat(args), {
+      env: Object.assign({}, process.env, { BEAM_SESSION: SESSION }),
+      timeout: 120000,
+      maxBuffer: 64 * 1024 * 1024
+    }, (err, stdout, stderr) => {
+      resolve({ ok: !err, out: String(stdout || '').trimEnd(), err: String(stderr || '').trimEnd() });
+    });
+  });
+}
+
+/* the CLI refuses anything that is not a known command; this only keeps the
+   generic tool from reaching the setup commands, which are not page work */
+const NOT_HERE = new Set(['server', 'extension', 'reloadext', 'help', '--help', '-h']);
+
+async function call(name, input) {
+  const tool = TOOLS.find((t) => t.name === name);
+  if (!tool) throw rpcError(-32602, 'unknown tool: ' + name);
+  input = input || {};
+  let args;
+  try { args = tool.args(input); }
+  catch (e) { return fail('invalid arguments: ' + e.message); }
+  if (!Array.isArray(args) || !args.length || args.some((x) => typeof x !== 'string')) {
+    return fail('args must be a non-empty list of strings');
+  }
+  if (NOT_HERE.has(args[0])) return fail('`beam ' + args[0] + '` is a setup command: run it in a terminal');
+
+  if (tool.shot) {
+    const file = path.join(os.tmpdir(), `beam-mcp-${process.pid}-${Date.now()}.jpg`);
+    const r = await beam(args.concat(['--out', file]));
+    if (!r.ok) return fail(r.err || r.out || 'screenshot failed');
+    try {
+      const data = fs.readFileSync(file).toString('base64');
+      const legend = r.out.split('\n').slice(1).join('\n').trim();
+      const content = [{ type: 'image', data, mimeType: 'image/jpeg' }];
+      if (legend) content.push({ type: 'text', text: legend });
+      return { content };
+    } finally { try { fs.unlinkSync(file); } catch (e) {} }
+  }
+
+  const r = await beam(args);
+  if (!r.ok) return fail(r.err || r.out || 'beam failed');
+  /* a hub-version note goes on stderr: keep it, it tells the user what to do */
+  const text = (r.err ? r.err + '\n' : '') + (r.out || 'ok');
+  return { content: [{ type: 'text', text }] };
+}
+
+function fail(text) { return { content: [{ type: 'text', text: '✗ ' + text.replace(/^✗ /, '') }], isError: true }; }
+
+let queue = Promise.resolve();
+
+function rpcError(code, message) { const e = new Error(message); e.code = code; return e; }
+
+async function handle(msg) {
+  switch (msg.method) {
+    case 'initialize': {
+      const want = msg.params && msg.params.protocolVersion;
+      return {
+        protocolVersion: PROTOCOLS.indexOf(want) >= 0 ? want : PROTOCOLS[0],
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: 'beam', title: 'Beam', version: pkg.version },
+        instructions: INSTRUCTIONS
+      };
+    }
+    case 'ping': return {};
+    case 'tools/list':
+      return { tools: TOOLS.map((t) => ({ name: t.name, title: t.title, description: t.description,
+        inputSchema: t.inputSchema, annotations: t.annotations })) };
+    case 'tools/call': {
+      /* one at a time, in arrival order: a client may send `open` and the
+         `snap` that follows without waiting, and the second must not win */
+      const run = queue.then(() => call(msg.params && msg.params.name, msg.params && msg.params.arguments));
+      queue = run.catch(() => {});
+      return run;
+    }
+    default:
+      throw rpcError(-32601, 'method not found: ' + msg.method);
+  }
+}
+
+function send(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+
+let buf = '';
+let inflight = 0;
+let ended = false;
+const maybeExit = () => { if (ended && !inflight) process.exit(0); };
+
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  let nl;
+  while ((nl = buf.indexOf('\n')) >= 0) {
+    const line = buf.slice(0, nl).trim();
+    buf = buf.slice(nl + 1);
+    if (!line) continue;
+    let msg;
+    try { msg = JSON.parse(line); }
+    catch (e) { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }); continue; }
+    /* notifications (no id) need no answer: initialized, cancelled… */
+    if (msg.id === undefined || msg.id === null) continue;
+    inflight++;
+    handle(msg).then(
+      (result) => send({ jsonrpc: '2.0', id: msg.id, result }),
+      (e) => send({ jsonrpc: '2.0', id: msg.id, error: { code: e.code || -32603, message: String(e.message || e) } })
+    ).finally(() => { inflight--; maybeExit(); });
+  }
+});
+process.stdin.on('end', () => { ended = true; maybeExit(); });
