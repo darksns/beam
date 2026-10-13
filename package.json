@@ -14,10 +14,11 @@
   },
   "bin": {
     "beam": "bin/beam",
-    "beam-mdconv": "bin/beam-mdconv"
+    "beam-mdconv": "bin/beam-mdconv",
+    "beam-mcp": "bin/beam-mcp"
   },
   "scripts": {
-    "test": "node test/session.test.js && node test/agent.test.js && node test/drag.test.js && node test/visual.test.js && node test/hub.test.js",
+    "test": "node test/session.test.js && node test/agent.test.js && node test/drag.test.js && node test/visual.test.js && node test/hub.test.js && node test/mcp.test.js",
     "hub": "node server/server.js"
   },
   "devDependencies": {
