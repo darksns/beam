@@ -50,7 +50,9 @@ by field. Actually look at it: that is when ambiguous labels surface. Then
 **5. Media.** `beam upload <file-input-target> <url>` downloads a file and drops
 it into the input the way a person would. It needs a reachable
 `input[type=file]`: nearly every CMS has one in a "classic" upload page, often
-simpler than the modern modal's drag & drop (drag & drop is **not** supported).
+simpler than the modern modal. When a dropzone is the only way in,
+`beam drop <zone> <file|url>` drops the file onto it, as a desktop drag would.
+Local files work too: `beam upload <target> ./photo.jpg`.
 
 **6. Save and verify.** Always save as a **draft**. Then read it back:
 `beam fields --json` and compare against the payload — a click on "Save" does

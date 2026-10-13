@@ -117,7 +117,9 @@ beam check <target> [on|off]
 beam press <Key>
 beam wait [--sel CSS] [--text T] [--timeout ms]
 beam scroll [--sel CSS] [--by N]
-beam upload <target> <url>           # downloads a file into an input[type=file]
+beam upload <target> <url|file>      # a file into an input[type=file]
+beam drop <target> <url|file>... [--text T] [--at x,y]   # onto a dropzone
+beam drag <target> <to> [--at x,y] [--from x,y] [--mode auto|html5|mouse]
 beam shot [--out file.jpg]           # screenshot to a file, only when truly needed
 beam reloadext                       # reload the extension after editing it
 beam extension                       # copy the extension to ~/.beam/extension, to load unpacked
@@ -152,6 +154,23 @@ beam do '[
 
 A failing step stops the sequence and reports the steps already done; put
 `"optional": true` on steps that may be missing.
+
+## Drag & drop
+
+```bash
+beam drag "css=#list li:nth-child(4)" "css=#list li:nth-child(1)"
+beam drag "css=#r1 .handle" "css=#r3" --at 40,28     # drop near the bottom of r3
+beam drop "css=.uploader" ./hero.jpg https://example.com/b.pdf
+```
+
+`auto` presses the source, then uses HTML5 drag events if it is (or became)
+`draggable`, pointer moves otherwise. If the result does not move, retry with
+the other `--mode`. `--at x,y` picks where on the target to let go — the top
+or bottom of a row decides before/after. `drag … accepted: false` / `drop …
+did not accept it` means no handler took it: target the zone itself, or the
+list container. Check the outcome by reading the list back (`beam text --sel`).
+Reordering and dropping are writes like any other: in a CMS, the new order is
+only kept after a save, which you ask about first.
 
 ## WordPress / ACF
 
@@ -224,8 +243,9 @@ of a task.
 ## Limits
 
 - Does not work on `chrome://` pages, the Web Store, or built-in PDFs.
-- No drag & drop, and no virtualized lists (React recycling nodes).
-- `hover` sends pointer events; it does not drag.
+- No virtualized lists (React recycling nodes).
+- `drag` and `drop` send synthetic events (`isTrusted` is false): a page that
+  checks it, or drags inside a cross-origin iframe, will not follow.
 - A tab that is not the selected tab of its window has no layout. Beam's own
   window keeps its tab selected, so hover works there without focusing the
   window. `beam focus` is how a person asks to see it.

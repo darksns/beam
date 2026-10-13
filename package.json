@@ -18,7 +18,7 @@
     "beam-mcp": "bin/beam-mcp"
   },
   "scripts": {
-    "test": "node test/session.test.js && node test/agent.test.js && node test/hub.test.js && node test/mcp.test.js",
+    "test": "node test/session.test.js && node test/agent.test.js && node test/drag.test.js && node test/hub.test.js && node test/mcp.test.js",
     "hub": "node server/server.js"
   },
   "devDependencies": {
