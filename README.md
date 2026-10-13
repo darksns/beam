@@ -56,10 +56,11 @@ claude plugin install beam-chrome@beam
 
 or, inside a session: `/plugin install beam-chrome --marketplace darksns/beam`.
 
-The plugin puts `beam` and `beam-mdconv` on the PATH of Claude's shell and
+The plugin puts `beam`, `beam-mdconv` and `beam-mcp` on the PATH of Claude's shell and
 loads the skills as `beam-chrome:beam` and `beam-chrome:web-publish`. It works
-in Claude Code only: it needs a local shell, Node 18+ and Chrome, which
-claude.ai and the mobile apps do not have. Updates: `claude plugin update beam-chrome@beam`.
+in Claude Code only: it needs a local shell, Node 18+ and Chrome. For a
+client without a shell (the Claude desktop app, Cursor, VS Code…) there is
+the [MCP server](#mcp-server). Updates: `claude plugin update beam-chrome@beam`.
 
 Then the extension (below). In the plugin's shell, `beam extension` copies it
 to `~/.beam/extension`: load that folder.
@@ -105,7 +106,7 @@ and this repo), the last one to connect takes the hub; the leftover panel says
 **Another copy is connected** and stops retrying, instead of the two copies
 stealing the socket from each other.
 
-The installer links `beam` and `beam-mdconv` into `~/.local/bin`, creates
+The installer links `beam`, `beam-mdconv` and `beam-mcp` into `~/.local/bin`, creates
 `~/.beam/` (hub token and site adapters) and, if Claude Code is installed, links
 the two skills into `~/.claude/skills/`. The hub starts by itself on every
 command. The toolbar icon opens a panel with the connection state, an editable
@@ -143,6 +144,26 @@ The WordPress editor lives in a frame. `beam frames` lists them, `beam snap --fr
 
 Markdown for a CMS field goes through the converter: `beam-mdconv post.md --format gutenberg|html|text [--json]`.
 
+### MCP server
+
+`beam-mcp` serves the same commands over MCP (stdio), for clients that have no
+shell. In the Claude desktop app, `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "beam": { "command": "beam-mcp" } } }
+```
+
+(an absolute path if the app does not see `~/.local/bin`; Cursor and VS Code
+take the same `command`). Tools: `beam_open`, `beam_snap`, `beam_fields`,
+`beam_text`, `beam_set`, `beam_do`, `beam_click`, `beam_fill`, `beam_shot`
+(returns the image) and `beam_command` for every other command. It runs the
+CLI underneath, so the hub, the token and every guard are the same; calls run
+one at a time, in order; the setup commands (`server`, `extension`,
+`reloadext`) are not exposed; and it sends the working rules (ask before
+saving, never type credentials) as MCP instructions. Its window is the session
+`mcp` (`BEAM_SESSION` renames it). claude.ai in a browser cannot reach a server
+on your machine: that needs the desktop app.
+
 `beam help` has the full list; `skills/beam/SKILL.md` is the reference an agent
 reads, and `skills/web-publish/` covers content work inside a CMS.
 
@@ -152,6 +173,7 @@ reads, and `skills/web-publish/` covers content work inside a CMS.
 |---|---|---|
 | CLI | `bin/beam` | builds the command, sends it over HTTP, formats the answer |
 | converter | `bin/beam-mdconv` | Markdown → Gutenberg blocks / HTML / text |
+| MCP server | `bin/beam-mcp` | stdio MCP, a thin adapter that runs `bin/beam` |
 | hub | `server/server.js` | HTTP for the CLI, WebSocket for Chrome. 127.0.0.1 only, executes nothing |
 | service worker | `extension/background.js` | holds the socket, manages tabs, injects the agent |
 | agent | `extension/agent.js` | lives in the isolated world: reads the structure, acts on the DOM |
