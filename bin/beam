@@ -230,6 +230,12 @@ function build() {
 
 /* -------------------------------------------------------------- render */
 
+/* frames that --frame all had to leave out */
+function skippedLines(r) {
+  if (!r || !Array.isArray(r.skipped) || !r.skipped.length) return [];
+  return ['', 'skipped: ' + r.skipped.map((k) => `frame ${k.frame} (${k.error})`).join(', ')];
+}
+
 function render(op, r) {
   if (opts.json) return JSON.stringify(r, null, 2);
   if (r == null) return 'ok';
@@ -240,10 +246,11 @@ function render(op, r) {
     return [head, `${r.count} revealed`, '', r.revealed || ''].join('\n').trimEnd();
   }
   if (op === 'snap') {
-    return [`${r.title}`, `${r.url}`, `${r.elements} elements${r.truncated ? ' · ' + r.truncated : ''}`, '', r.outline].join('\n');
+    return [`${r.title}`, `${r.url}`, `${r.elements} elements${r.truncated ? ' · ' + r.truncated : ''}`, '', r.outline]
+      .concat(skippedLines(r)).join('\n');
   }
   if (op === 'outline') return [`${r.title}`, `${r.url}`, '', r.structure].join('\n');
-  if (op === 'text') return [`${r.title} · ${r.chars} characters`, '', r.text].join('\n');
+  if (op === 'text') return [`${r.title} · ${r.chars} characters`, '', r.text].concat(skippedLines(r)).join('\n');
   if (op === 'html') return r.html;
   if (op === 'tabs') {
     return r.map((t) => `${t.current ? '*' : ' '} [${t.tab}]${t.beam ? ' beam:' + t.beam : ''} ${(t.title || '').slice(0, 60)}\n      ${t.url}`).join('\n');
@@ -261,10 +268,10 @@ function render(op, r) {
     return [`${r.count} fields · ${r.url}`, ''].concat(r.fields.map((f) =>
       `${f.ref} ${f.type}${f.required ? '*' : ''}${f.hidden ? ' (hidden)' : ''}  "${f.label}"` +
       `\n    name=${f.name || '—'}  sel=${f.selector}` +
-      `\n    = ${f.secret ? (f.length ? `<hidden, ${f.length} chars>` : '""') : cut(f.value)}`)).join('\n');
+      `\n    = ${f.secret ? (f.length ? `<hidden, ${f.length} chars>` : '""') : cut(f.value)}`)).concat(skippedLines(r)).join('\n');
   }
   if (op === 'frames') {
-    return r.map((f) => `[${f.frame}]${f.injectable ? '' : ' (not injectable)'} ${f.title || ''}\n     ${f.url}`).join('\n');
+    return r.map((f) => `[${f.frame}]${f.injectable ? '' : ' (not injectable' + (f.error ? ': ' + f.error : '') + ')'} ${f.title || ''}\n     ${f.url}`).join('\n');
   }
   if (op === 'network') {
     const head = `${r.count} of ${r.total} requests · tab ${r.tab}${r.cleared ? ' · cleared' : ''}`;

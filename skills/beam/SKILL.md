@@ -92,6 +92,11 @@ beam set --frame 583 @payload.json
 `--frame all` is for reading only: to act, name one frame. Frame ids change when
 the application recreates them — re-read them, do not reuse them.
 
+A frame that does not answer within 8 s is left out: `--frame all` lists it under
+`skipped`, and `beam frames` shows it as `(not injectable: timeout)` with its id
+and url. A command that hangs for more than 45 s (or `--timeout` + 15 s) answers
+with an error and frees the session, so no `reloadext` is needed.
+
 ### Network
 
 `beam network` lists the requests made by the bound tab (and Beam's own tab)

@@ -141,8 +141,15 @@ async function connect() {
     if (!cmd.id) return;
     const job = async () => {
       let out;
-      try { out = { id: cmd.id, ok: true, result: await dispatch(cmd) }; }
-      catch (e) { out = { id: cmd.id, ok: false, error: String(e && e.message || e) }; }
+      /* a command that never settles must not hold its session for ever:
+         past the budget it answers with an error and frees the lane */
+      const budget = Math.max(LANE_MS, (Number(cmd.timeout) || 30000) + 15000);
+      try { out = { id: cmd.id, ok: true, result: await within(budget, dispatch(cmd), cmd.op || 'command') }; }
+      catch (e) {
+        if (e && e.timeout) note('lane-timeout', { op: cmd.op, ms: budget });
+        out = { id: cmd.id, ok: false, error: String(e && e.message || e) +
+          (e && e.timeout ? '; the session was released, the command may still be running' : '') };
+      }
       /* answer on the socket the command came in on: a reconnect in the middle
          of a long command must not send the reply into the new one */
       try { socket.send(JSON.stringify(out)); }
@@ -301,6 +308,7 @@ const DEFAULT_SESSION = 'default';
    Different names run together. The stored tail swallows rejections so one
    failed command does not stall the session. */
 const lanes = new Map();
+const LANE_MS = 45000;
 function lane(name, fn) {
   const prev = lanes.get(name) || Promise.resolve();
   const run = prev.then(fn, fn);
@@ -808,6 +816,83 @@ function tagFrame(out, fid) {
   return out;
 }
 
+/* A frame that never reaches document_idle (a hidden blank.html, a frame the
+   app keeps for its saves) used to leave executeScript pending for ever, and
+   with it the whole session lane. Every injection now has a deadline. */
+const FRAME_MS = 8000;
+
+function within(ms, p, what) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const e = new Error(what + ' did not answer within ' + ms + ' ms');
+      e.timeout = true;
+      reject(e);
+    }, ms);
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
+
+/* agent.js, shim.js and the command, in one frame. `frame` null is the top
+   document. Returns what the page answered: { ok, r } or { ok: false, e }. */
+async function runIn(tab, frame, cmd, runMs, immediate) {
+  const target = { tabId: tab.id };
+  if (frame != null) target.frameIds = [Number(frame)];
+  const extra = immediate ? { injectImmediately: true } : {};
+  const what = frame == null ? 'the page' : 'frame ' + frame;
+  await within(FRAME_MS, chrome.scripting.executeScript({ target, files: ['agent.js'], ...extra }), what);
+  try {
+    await within(FRAME_MS, chrome.scripting.executeScript({ target, files: ['shim.js'], world: 'MAIN', ...extra }), what);
+  } catch (e) {
+    /* some frames refuse MAIN-world injection; fills fall back to the DOM.
+       A frame that hangs here will hang on the command too. */
+    if (e.timeout) throw e;
+  }
+  const results = await within(runMs, chrome.scripting.executeScript({
+    target,
+    args: [cmd],
+    ...extra,
+    func: async (c) => {
+      try { return { ok: true, r: await window.__beam.run(c) }; }
+      catch (e) { return { ok: false, e: String(e && e.message || e), partial: e && e.partial }; }
+    }
+  }), what);
+  return results && results[0] && results[0].result;
+}
+
+/* Every frame on its own, so one that does not answer only costs itself.
+   Frames that time out or refuse come back in `skipped`. */
+async function everyFrame(tab, cmd) {
+  const nav = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null);
+  const ids = nav && nav.length ? nav.map((f) => f.frameId) : [0];
+  /* injection also finds the frames webNavigation does not list (the
+     WordPress editor canvas); if one frame hangs, the probe only costs its
+     deadline and we keep the listed ones */
+  const probe = within(FRAME_MS, chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true }, injectImmediately: true, func: () => true
+  }), 'frame discovery').then((rs) => (rs || []).map((r) => r.frameId), () => []);
+  const listed = Promise.allSettled(ids.map((id) => runIn(tab, id, cmd, FRAME_MS, true)));
+  const extra = (await probe).filter((id) => ids.indexOf(id) < 0);
+  ids.push(...extra);
+  const settled = (await listed).concat(await Promise.allSettled(extra.map((id) => runIn(tab, id, cmd, FRAME_MS, true))));
+  const parts = [];
+  const skipped = [];
+  settled.forEach((s, i) => {
+    const frame = ids[i];
+    if (s.status === 'rejected') {
+      const e = s.reason;
+      skipped.push({ frame, error: e && e.timeout ? 'timeout' : String(e && e.message || e) });
+    } else if (!s.value) {
+      skipped.push({ frame, error: 'no answer' });
+    } else if (!s.value.ok) {
+      skipped.push({ frame, error: s.value.e });
+    } else {
+      parts.push({ frame, data: tagFrame(s.value.r, frame) });
+    }
+  });
+  return { parts, skipped };
+}
+
 async function page(tab, cmd) {
   if (/^(chrome|edge|about|devtools|chrome-extension):/.test(tab.url || '')) {
     throw new Error('system page, not injectable: ' + tab.url);
@@ -817,24 +902,9 @@ async function page(tab, cmd) {
     throw new Error('--frame all is for reading only; to act, name one frame (beam frames)');
   }
 
-  const target = { tabId: tab.id };
-  if (all) target.allFrames = true;
-  else if (cmd.frame != null) target.frameIds = [Number(cmd.frame)];
-
-  await chrome.scripting.executeScript({ target, files: ['agent.js'] });
-  try { await chrome.scripting.executeScript({ target, files: ['shim.js'], world: 'MAIN' }); }
-  catch (e) { /* some frames refuse MAIN-world injection; fills fall back to the DOM */ }
-  const results = await chrome.scripting.executeScript({
-    target,
-    args: [cmd],
-    func: async (c) => {
-      try { return { ok: true, r: await window.__beam.run(c) }; }
-      catch (e) { return { ok: false, e: String(e && e.message || e), partial: e && e.partial }; }
-    }
-  });
-
   if (!all) {
-    const out = results[0] && results[0].result;
+    /* the hub gives up at cmd.timeout anyway; `wait` may legitimately use it all */
+    const out = await runIn(tab, cmd.frame, cmd, Number(cmd.timeout) || 30000, false);
     if (!out) throw new Error('no answer from the page');
     if (!out.ok) {
       const err = new Error(out.e);
@@ -848,38 +918,36 @@ async function page(tab, cmd) {
     return out.r;
   }
 
-  /* every frame: keep only the ones that answered */
-  const parts = [];
-  for (const res of results) {
-    const out = res && res.result;
-    if (!out || !out.ok) continue;
-    parts.push({ frame: res.frameId, data: tagFrame(out.r, res.frameId) });
+  const { parts, skipped } = await everyFrame(tab, cmd);
+  if (!parts.length) {
+    throw new Error('no frame answered' + (skipped.length
+      ? ': ' + skipped.map((k) => 'frame ' + k.frame + ' ' + k.error).join(', ') : ''));
   }
-  if (!parts.length) throw new Error('no frame answered');
+  const withSkipped = (o) => (skipped.length ? Object.assign(o, { skipped }) : o);
 
   if (cmd.op === 'snap') {
-    return {
+    return withSkipped({
       url: parts[0].data.url,
       title: parts[0].data.title,
       elements: parts.reduce((n, p) => n + (p.data.elements || 0), 0),
       frames: parts.map((p) => ({ frame: p.frame, url: p.data.url, elements: p.data.elements })),
       outline: parts.map((p) => (p.frame ? '── frame ' + p.frame + ' · ' + p.data.url + ' ──\n' : '') + p.data.outline).join('\n\n')
-    };
+    });
   }
   if (cmd.op === 'fields') {
-    return {
+    return withSkipped({
       url: parts[0].data.url,
       count: parts.reduce((n, p) => n + (p.data.count || 0), 0),
       fields: parts.flatMap((p) => p.data.fields || [])
-    };
+    });
   }
   if (cmd.op === 'text' || cmd.op === 'html') {
     const key = cmd.op === 'text' ? 'text' : 'html';
-    return {
+    return withSkipped({
       url: parts[0].data.url,
       chars: parts.reduce((n, p) => n + (p.data.chars || 0), 0),
       [key]: parts.map((p) => (p.frame ? '── frame ' + p.frame + ' ──\n' : '') + (p.data[key] || '')).join('\n\n')
-    };
+    });
   }
   return parts.map((p) => ({ frame: p.frame, result: p.data }));
 }
@@ -1113,15 +1181,24 @@ async function dispatch(cmd) {
       const t = await targetTab(cmd, name);
       const nav = await chrome.webNavigation.getAllFrames({ tabId: t.id }).catch(() => []);
       const byId = new Map((nav || []).map((f) => [f.frameId, { frame: f.frameId, parent: f.parentFrameId, url: f.url }]));
-      /* injection also finds the frames webNavigation does not list */
-      const seen = await page(t, { op: 'info', frame: 'all' });
-      for (const p of seen) {
+      /* always answer: a frame that hangs or refuses still gets its row,
+         with the id and url webNavigation knows */
+      const system = /^(chrome|edge|about|devtools|chrome-extension):/.test(t.url || '');
+      const { parts, skipped } = system ? { parts: [], skipped: [] } : await everyFrame(t, { op: 'info' });
+      for (const p of parts) {
         const row = byId.get(p.frame) || { frame: p.frame, parent: null };
-        row.url = p.result.url;
-        row.title = p.result.title;
+        row.url = p.data.url;
+        row.title = p.data.title;
         row.injectable = true;
         byId.set(p.frame, row);
       }
+      for (const k of skipped) {
+        const row = byId.get(k.frame) || { frame: k.frame, parent: null };
+        row.injectable = false;
+        row.error = k.error;
+        byId.set(k.frame, row);
+      }
+      for (const row of byId.values()) if (row.injectable == null) row.injectable = false;
       return [...byId.values()].sort((a, b) => a.frame - b.frame);
     }
 
