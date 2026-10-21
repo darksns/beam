@@ -70,6 +70,9 @@ const HELP = `beam — drive Chrome as text
     beam wait [--sel CSS] [--text T] [--timeout ms]
     beam scroll [--sel CSS] [--by N]    scroll the page, or one element into view
     beam shot [--out file.jpg]          screenshot to a file (only when truly needed)
+    beam viewport [<w> [<h>] | <w>x<h> | mobile | tablet | desktop]
+                                        resize the session's window for responsive checks;
+                                        no argument prints the current viewport
 
   target: @12 (ref from snap) · @3:12 (ref inside frame 3) · css=.klass · text=Update
           label=Title · name=post_title · title=Heading Settings
@@ -141,6 +144,9 @@ function splitFrame(cmd, key) {
   cmd[key] = '@' + m[2];
 }
 
+/* common breakpoints, in CSS pixels */
+const VIEWPORTS = { mobile: [375, 812], tablet: [768, 1024], desktop: [1280, 800] };
+
 function build() {
   const cmd = { op };
   for (const k of Object.keys(opts)) cmd[k] = opts[k];
@@ -163,6 +169,19 @@ function build() {
     case 'do': {
       const parsed = JSON.parse(readArg(positional[0]));
       cmd.steps = Array.isArray(parsed) ? parsed : parsed.steps;
+      break;
+    }
+    case 'viewport': {
+      const a = positional[0];
+      if (a == null) break;
+      const preset = VIEWPORTS[String(a).toLowerCase()];
+      const m = /^(\d+)(?:x(\d+))?$/i.exec(String(a));
+      if (preset) { cmd.width = preset[0]; cmd.height = preset[1]; }
+      else if (m) {
+        cmd.width = Number(m[1]);
+        if (m[2]) cmd.height = Number(m[2]);
+        else if (positional[1] != null) cmd.height = Number(positional[1]);
+      } else throw new Error('viewport: a width, <w>x<h>, or one of ' + Object.keys(VIEWPORTS).join(', '));
       break;
     }
     case 'network':
@@ -233,6 +252,12 @@ function render(op, r) {
       return `${st.padEnd(3)} ${q.method.padEnd(6)} ${type.padEnd(10)} ${ms.padStart(7)}${q.cache ? ' cache' : ''}  ${q.url}` +
         (q.error ? `\n    ${q.error}` : '');
     })).join('\n').trimEnd();
+  }
+  if (op === 'viewport') {
+    const off = r.asked && (r.width !== r.asked.width || (r.asked.height != null && r.height !== r.asked.height));
+    return `viewport ${r.width}×${r.height}` + (r.zoom !== 1 ? ` · zoom ${r.zoom}` : '') +
+      ` · window ${r.window.width}×${r.window.height}` +
+      (off ? `\nasked ${r.asked.width}${r.asked.height != null ? '×' + r.asked.height : ''}: Chrome would not size the window to it` : '');
   }
   if (op === 'upload') return `${r.uploaded} · ${Math.round(r.bytes / 1024)} KB · ${r.type}`;
   if (op === 'do') {

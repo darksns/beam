@@ -956,6 +956,68 @@ function extFor(mime) {
   return map[String(mime || '').split(';')[0].trim()] || '';
 }
 
+/* ------------------------------------------------------------- viewport */
+
+/* What the page lays out against: CSS pixels, as media queries see them. */
+async function viewportOf(tab) {
+  const t = await chrome.tabs.get(tab.id);
+  const w = await chrome.windows.get(t.windowId);
+  const zoom = await chrome.tabs.getZoom(t.id).catch(() => 1);
+  let page = null;
+  try {
+    const res = await within(FRAME_MS, chrome.scripting.executeScript({
+      target: { tabId: t.id },
+      func: () => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio })
+    }), 'the page');
+    page = res && res[0] && res[0].result;
+  } catch (e) {}
+  return {
+    width: page ? page.width : Math.round(t.width / zoom),
+    height: page ? page.height : Math.round(t.height / zoom),
+    dpr: page ? page.dpr : null,
+    zoom: zoom,
+    window: { width: w.width, height: w.height, state: w.state }
+  };
+}
+
+/* Grow or shrink the window until the tab's content area is `tw` × `th`
+   device pixels. The frame around it (tab strip, toolbar) is measured, not
+   guessed, and Chrome may round or refuse a size, hence the retries. */
+async function fitWindow(tab, tw, th) {
+  for (let i = 0; i < 4; i++) {
+    const t = await chrome.tabs.get(tab.id);
+    const w = await chrome.windows.get(t.windowId);
+    const dw = tw - t.width;
+    const dh = th == null ? 0 : th - t.height;
+    if (!dw && !dh) return;
+    await chrome.windows.update(w.id, { width: w.width + dw, height: w.height + dh });
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+/* Responsive checks without the debugging protocol: the session's own window
+   is resized, so media queries see a real width. Below the narrowest window
+   Chrome allows, the tab is zoomed instead (zoom 2 on a 750px tab is a 375px
+   viewport), scoped to this tab so the person's tabs on the same site keep
+   their zoom. No device emulation: no touch, no mobile user agent. */
+async function setViewport(tab, width, height) {
+  const w = await chrome.windows.get(tab.windowId);
+  if (w.state !== 'normal') await chrome.windows.update(w.id, { state: 'normal' });
+  await chrome.tabs.setZoomSettings(tab.id, { scope: 'per-tab' });
+  let zoom = 1;
+  await chrome.tabs.setZoom(tab.id, zoom);
+  await fitWindow(tab, width, height);
+  const t = await chrome.tabs.get(tab.id);
+  if (t.width > width) {
+    /* the window would not get that narrow: keep the floor it reached and
+       zoom in until the viewport, in CSS pixels, is the width asked for */
+    zoom = Math.ceil((t.width / width) * 100) / 100;
+    await chrome.tabs.setZoom(tab.id, zoom);
+    await fitWindow(tab, Math.round(width * zoom), height == null ? null : Math.round(height * zoom));
+  }
+  return viewportOf(tab);
+}
+
 /* -------------------------------------------------------------- commands */
 
 async function dispatch(cmd) {
@@ -1146,6 +1208,27 @@ async function dispatch(cmd) {
         mime: cmd.mime || r.headers.get('content-type') || 'application/octet-stream',
         frame: cmd.frame
       });
+    }
+
+    case 'viewport': {
+      const t = await targetTab(cmd, name);
+      if (cmd.width == null) return viewportOf(t);
+      const width = Number(cmd.width);
+      const height = cmd.height == null ? null : Number(cmd.height);
+      if (!(width >= 200 && width <= 4000) || (height != null && !(height >= 200 && height <= 4000))) {
+        throw new Error('viewport: width and height go from 200 to 4000 pixels');
+      }
+      /* the window is resized, so only this session's own one, unless asked */
+      const s = sessions[name];
+      if (!cmd.force && (!s || s.beamWindow == null || t.windowId !== s.beamWindow)) {
+        throw new Error('tab ' + t.id + ' is not in this session\'s window, and resizing would move a ' +
+          'window you use. beam open <url> first, or repeat with --force.');
+      }
+      const selected = await withFocus(() => selectWithoutFocus(t, name));
+      if (!selected && !cmd.force) throw new Error('viewport would switch a tab this session does not own');
+      const r = await setViewport(t, width, height);
+      r.asked = { width: width, height: height };
+      return r;
     }
 
     case 'network':

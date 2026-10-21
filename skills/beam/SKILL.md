@@ -124,6 +124,7 @@ beam wait [--sel CSS] [--text T] [--timeout ms]
 beam scroll [--sel CSS] [--by N]
 beam upload <target> <url>           # downloads a file into an input[type=file]
 beam shot [--out file.jpg]           # screenshot to a file, only when truly needed
+beam viewport [375 | 375x812 | mobile | tablet | desktop]   # resize for responsive checks
 beam reloadext                       # reload the extension after editing it
 beam extension                       # copy the extension to ~/.beam/extension, to load unpacked
 ```
@@ -234,5 +235,10 @@ of a task.
 - A tab that is not the selected tab of its window has no layout. Beam's own
   window keeps its tab selected, so hover works there without focusing the
   window. `beam focus` is how a person asks to see it.
+- `viewport` resizes this session's own window, so media queries see a real
+  width. Below Chrome's narrowest window (about 500px) it zooms the tab
+  instead, so `innerWidth` is still the width asked for. No device emulation:
+  no touch events and no mobile user agent. Snap again after a resize: the
+  layout, and so the refs, may have changed.
 - If a click causes a full navigation, wait with `beam wait` and snap again: the
   previous refs are gone.

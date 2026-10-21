@@ -134,7 +134,7 @@ no chat id and no name shares the session `default`.
 
 Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `ping` · `tabs` · `frames` · `sessions` · `network`
 Act: `open` · `focus` · `nav` · `reload` · `back` · `forward` · `close` · `use` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
-`set` · `do` · `wait` · `scroll` · `shot`
+`set` · `do` · `wait` · `scroll` · `shot` · `viewport`
 
 Targets are `@12` (a ref from the last snap), `@3:12` (ref 12 inside frame 3),
 `css=.klass`, `text=Update`, `label=Title`, `name=post_title`, `title=Heading Settings`.
