@@ -21,8 +21,10 @@ run `beam server --stop` once. `beam ping` returns the id, the version and the p
 
 ## How to work
 
-Do not use `beam shot`. Screenshots are for when the user wants a visual check
-or a widget is undecipherable from the DOM. The normal flow is:
+Do not use `beam shot` by default. Screenshots are for when the user wants a
+visual check or a widget is undecipherable from the DOM (canvas, charts,
+builder layouts) — and then `beam shot --marks`, so the picture carries refs.
+See **Visual pages**. The normal flow is:
 
 1. `beam open <url>` once. It uses a Chrome window of its own that stays
    unfocused, and every later `open` reuses that same tab. Do not pass `--new`.
@@ -44,7 +46,7 @@ with nothing bound fails instead of attaching to whatever they are looking at.
 ## Reading
 
 ```
-beam snap    [--sel CSS] [--max N] [--hidden]   # interactive elements, with @n refs
+beam snap    [--sel CSS] [--max N] [--hidden] [--boxes]   # interactive elements, with @n refs
 beam outline [--sel CSS] [--depth N]            # the HTML structure tree
 beam fields  [--sel CSS] [--hidden] [--vlen N]  # every form field, as JSON
 beam text    [--sel CSS] [--max N] [--from N]   # readable text
@@ -122,15 +124,17 @@ beam check <target> [on|off]
 beam press <Key>
 beam wait [--sel CSS] [--text T] [--timeout ms]
 beam scroll [--sel CSS] [--by N]
-beam upload <target> <url>           # downloads a file into an input[type=file]
-beam shot [--out file.jpg]           # screenshot to a file, only when truly needed
+beam upload <target> <url|file>      # a file into an input[type=file]
+beam drop <target> <url|file>... [--text T] [--at x,y]   # onto a dropzone
+beam drag <target> <to> [--at x,y] [--from x,y] [--mode auto|html5|mouse]
+beam shot [<target>] [--marks] [--hires] [--out file.jpg]  # only when truly needed
 beam viewport [375 | 375x812 | mobile | tablet | desktop]   # resize for responsive checks
 beam reloadext                       # reload the extension after editing it
 beam extension                       # copy the extension to ~/.beam/extension, to load unpacked
 ```
 
 **Targets**: `@12` · `css=.my-class` · `text=Update` · `label=Kicker` ·
-`name=acf[field_abc]` · `title=Heading Settings`. A bare string is tried as CSS,
+`name=acf[field_abc]` · `title=Heading Settings` · `xy=120,40` (viewport point). A bare string is tried as CSS,
 then as text, then as a label.
 
 ## Batch — the fast path
@@ -158,6 +162,37 @@ beam do '[
 
 A failing step stops the sequence and reports the steps already done; put
 `"optional": true` on steps that may be missing.
+
+## Drag & drop
+
+```bash
+beam drag "css=#list li:nth-child(4)" "css=#list li:nth-child(1)"
+beam drag "css=#r1 .handle" "css=#r3" --at 40,28     # drop near the bottom of r3
+beam drop "css=.uploader" ./hero.jpg https://example.com/b.pdf
+```
+
+`auto` presses the source, then uses HTML5 drag events if it is (or became)
+`draggable`, pointer moves otherwise. If the result does not move, retry with
+the other `--mode`. `--at x,y` picks where on the target to let go — the top
+or bottom of a row decides before/after. `drag … accepted: false` / `drop …
+did not accept it` means no handler took it: target the zone itself, or the
+list container. Check the outcome by reading the list back (`beam text --sel`).
+Reordering and dropping are writes like any other: in a CMS, the new order is
+only kept after a save, which you ask about first.
+
+## Visual pages
+
+```bash
+beam snap --boxes            # every line gets [x,y wxh]; canvas/svg/img/video listed
+beam shot --marks            # screenshot with @n labels drawn, plus the legend as text
+beam shot css=#chart         # crop to one element
+beam click css=#chart --at 167,102   # a point inside it, from its top-left corner
+beam click xy=640,380        # whatever is drawn at that viewport point
+```
+
+The refs drawn by `--marks` are live: `beam click @12` right after works. To
+pick a point inside a canvas, `shot <target>` it (the crop has 8 px of margin
+around the element) and pass the point with `--at`.
 
 ## WordPress / ACF
 
@@ -230,8 +265,10 @@ of a task.
 ## Limits
 
 - Does not work on `chrome://` pages, the Web Store, or built-in PDFs.
-- No drag & drop, and no virtualized lists (React recycling nodes).
-- `hover` sends pointer events; it does not drag.
+- No virtualized lists (React recycling nodes).
+- `drag` and `drop` send synthetic events (`isTrusted` is false): a page that
+  checks it, or drags inside a cross-origin iframe, will not follow.
+- `shot <target>` and `--marks` work in the main frame only.
 - A tab that is not the selected tab of its window has no layout. Beam's own
   window keeps its tab selected, so hover works there without focusing the
   window. `beam focus` is how a person asks to see it.

@@ -25,7 +25,8 @@ function token() {
 
 /* value-less flags: otherwise they would swallow the argument that follows
    (e.g. `beam set --dry '{...}'`) */
-const BOOL = new Set(['json', 'dry', 'hidden', 'raw', 'background', 'stop', 'all', 'force', 'focus', 'new', 'failed', 'clear']);
+const BOOL = new Set(['json', 'dry', 'hidden', 'raw', 'background', 'stop', 'all', 'force', 'focus', 'new', 'failed', 'clear',
+  'boxes', 'marks', 'png', 'hires']);
 
 const argv = process.argv.slice(2);
 const op = argv.shift();
@@ -44,7 +45,9 @@ for (let i = 0; i < argv.length; i++) {
 const HELP = `beam — drive Chrome as text
 
   read
-    beam snap    [--sel CSS] [--max N] [--hidden]   interactive elements, with @n refs
+    beam snap    [--sel CSS] [--max N] [--hidden] [--boxes]
+                                                    interactive elements, with @n refs;
+                                                    --boxes adds [x,y wxh] and canvas/img/svg
     beam outline [--sel CSS] [--depth N]            structure tree
     beam fields  [--sel CSS] [--hidden]             every form field (JSON)
     beam text    [--sel CSS] [--max N] [--from N]   readable text
@@ -58,24 +61,32 @@ const HELP = `beam — drive Chrome as text
     beam open <url> [--new] [--focus]   its own window, unfocused; reuses that session's tab
     beam focus                          bring the Beam window forward
     beam nav <url> | reload | back | forward | close | use <tab> [--focus]
-    beam click <target>
+    beam click <target> [--at x,y]      --at: a point inside it, from its top-left corner
     beam hover <target>                 mouseover/mousemove at the element's center
     beam fill <target> <value>
     beam select <target> <value>
     beam check <target> [on|off]
     beam press <Key>
-    beam upload <target> <url>          download a file into an input[type=file]
+    beam upload <target> <url|file>     a file into an input[type=file]
+    beam drop <target> <url|file>... [--text T] [--at x,y]
+                                        drop files (or text) onto a dropzone
+    beam drag <target> <to> [--at x,y] [--from x,y] [--mode auto|html5|mouse] [--steps N]
+                                        drag an element onto another (sort, move)
     beam set '<json>' | @file.json      fill many fields at once (--dry to preview)
     beam do  '<json>' | @file.json      a sequence of steps in one round trip
     beam wait [--sel CSS] [--text T] [--timeout ms]
     beam scroll [--sel CSS] [--by N]    scroll the page, or one element into view
-    beam shot [--out file.jpg]          screenshot to a file (only when truly needed)
+    beam shot [<target>] [--marks] [--hires] [--out file.jpg]
+                                        screenshot to a file (only when truly needed):
+                                        <target> crops to one element; --marks draws
+                                        the @n refs on it and prints their legend;
+                                        both come at CSS size unless --hires
     beam viewport [<w> [<h>] | <w>x<h> | mobile | tablet | desktop]
                                         resize the session's window for responsive checks;
                                         no argument prints the current viewport
 
   target: @12 (ref from snap) · @3:12 (ref inside frame 3) · css=.klass · text=Update
-          label=Title · name=post_title · title=Heading Settings
+          label=Title · name=post_title · title=Heading Settings · xy=120,40 (viewport point)
   global: --tab <id>  --session <nome>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
           BEAM_SESSION=<nome>   named window; unset follows the Claude/Cursor chat, else "default"
   setup
@@ -128,6 +139,28 @@ async function ensureServer() {
 
 /* ------------------------------------------------------------ commands */
 
+/* A local file, sent as bytes: the extension cannot read the disk. The hub
+   takes 20 MB of JSON, and base64 grows by a third. */
+const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.avif': 'image/avif', '.svg': 'image/svg+xml', '.pdf': 'application/pdf',
+  '.txt': 'text/plain', '.csv': 'text/csv', '.json': 'application/json', '.zip': 'application/zip',
+  '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+
+function localFile(p) {
+  const st = fs.statSync(p);
+  if (!st.isFile()) throw new Error('not a file: ' + p);
+  if (st.size > 14e6) throw new Error('file too large to send through the hub (14 MB max): ' + p);
+  return {
+    b64: fs.readFileSync(p).toString('base64'),
+    name: path.basename(p),
+    mime: MIME[path.extname(p).toLowerCase()] || 'application/octet-stream'
+  };
+}
+
+const isUrl = (v) => /^(https?|data):/i.test(String(v || ''));
+
 function readArg(v) {
   if (typeof v === 'string' && v.startsWith('@') && v.length > 1 && !/^@\d+$/.test(v)) {
     return fs.readFileSync(v.slice(1), 'utf8');
@@ -155,6 +188,13 @@ function build() {
     case 'open': case 'nav': cmd.url = positional[0]; break;
     case 'use': cmd.tab = positional[0]; break;
     case 'click': case 'hover': cmd.target = positional[0]; break;
+    case 'drag': cmd.target = positional[0]; cmd.to = positional[1]; break;
+    case 'drop':
+      cmd.target = positional[0];
+      cmd.urls = positional.slice(1).filter(isUrl);
+      cmd.files = positional.slice(1).filter((p) => !isUrl(p)).map(localFile);
+      break;
+    case 'shot': if (positional[0]) cmd.target = positional[0]; break;
     case 'fill': case 'select':
       cmd.target = positional[0];
       cmd.value = positional.slice(1).join(' ');
@@ -164,7 +204,11 @@ function build() {
       cmd.value = positional[1] === undefined ? true : !/^(off|false|0|no)$/i.test(positional[1]);
       break;
     case 'press': cmd.key = positional[0]; break;
-    case 'upload': cmd.target = positional[0]; cmd.url = positional[1]; break;
+    case 'upload':
+      cmd.target = positional[0];
+      if (isUrl(positional[1])) cmd.url = positional[1];
+      else Object.assign(cmd, localFile(positional[1]), opts.name ? { name: opts.name } : {});
+      break;
     case 'set': cmd.map = JSON.parse(readArg(positional[0])); break;
     case 'do': {
       const parsed = JSON.parse(readArg(positional[0]));
@@ -193,6 +237,11 @@ function build() {
   }
   if (cmd.newTab === 'false') cmd.newTab = false;
   if (cmd.target) splitFrame(cmd, 'target');
+  if (cmd.to) splitFrame(cmd, 'to');
+  /* `text --from N` is an offset; on a drag, --from is a point */
+  if (/^(click|drag|drop)$/.test(op) && (typeof cmd.at === 'number' || typeof cmd.from === 'number')) {
+    throw new Error('--at and --from want x,y');
+  }
   if (cmd.frame === 'true') cmd.frame = 'all';
   cmd.session = sessionOf(opts.session, process.env);
   return cmd;
@@ -259,6 +308,17 @@ function render(op, r) {
       ` · window ${r.window.width}×${r.window.height}` +
       (off ? `\nasked ${r.asked.width}${r.asked.height != null ? '×' + r.asked.height : ''}: Chrome would not size the window to it` : '');
   }
+  if (op === 'drag') {
+    return `dragged ${r.dragged} → ${r.to} · ${r.mode}` +
+      (r.accepted === false ? '\nthe target did not accept the drop (it never cancelled dragover)' : '') +
+      (r.note ? '\n' + r.note : '');
+  }
+  if (op === 'drop') {
+    return `dropped ${r.dropped} on ${r.on}` +
+      (r.accepted ? '' : '\nthe target did not accept it (no handler cancelled dragover or drop): try the zone itself, or the page body');
+  }
+  if (op === 'click' && r.x != null) return `clicked ${r.clicked} · ${r.x},${r.y}` +
+    (r.layout === false ? '\nno layout on this tab — `beam open` it in Beam\'s window' : '');
   if (op === 'upload') return `${r.uploaded} · ${Math.round(r.bytes / 1024)} KB · ${r.type}`;
   if (op === 'do') {
     return r.steps.map((s) => `${s.error ? '✗' : '✓'} ${s.step} ${s.op}  ${s.error || JSON.stringify(s.result)}`).join('\n');
@@ -332,7 +392,15 @@ After an update: beam extension && beam reloadext`);
     const out = opts.out || path.join(os.tmpdir(), `beam-shot-${Date.now()}.jpg`);
     const b64 = res.result.dataUrl.replace(/^data:[^,]+,/, '');
     fs.writeFileSync(out, Buffer.from(b64, 'base64'));
+    if (opts.json) {
+      console.log(JSON.stringify(Object.assign({}, res.result, { dataUrl: undefined, file: out }), null, 2));
+      return;
+    }
     console.log(out);
+    /* the legend of the labels drawn on the picture */
+    if (res.result.outline != null) {
+      console.log(`${res.result.marked} marked on screen · ${res.result.elements} elements\n\n${res.result.outline}`);
+    }
     return;
   }
 

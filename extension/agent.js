@@ -5,7 +5,7 @@
 (function () {
   'use strict';
   /* the version lets a newer agent replace one that is already injected */
-  var VERSION = 6;
+  var VERSION = 8;
   if (window.__beam && window.__beam.version === VERSION) return;
 
   var MAXREF = 1500;
@@ -152,10 +152,19 @@
 
   /* ------------------------------------------------------------- targets */
 
+  /* xy=120,40 is a viewport point: whatever is drawn there. It is how a canvas,
+     a map or a chart gets clicked, since none of them has a DOM to name. */
+  function xyOf(target) {
+    var m = /^xy=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/.exec(String(target == null ? '' : target).trim());
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+  }
+
   function resolve(target) {
     if (target == null) return null;
     if (typeof target === 'number') return B.refs[target] || null;
     var s = String(target).trim(), m;
+    var xy = xyOf(s);
+    if (xy) return document.elementFromPoint(xy.x, xy.y);
     if ((m = s.match(/^@(?:\d+:)?(\d+)$/))) return B.refs[Number(m[1])] || null;
     if ((m = s.match(/^css=([\s\S]+)$/))) return document.querySelector(m[1]);
     if ((m = s.match(/^text=([\s\S]+)$/))) return byText(m[1]);
@@ -271,7 +280,18 @@
     if (el.disabled) line += ' (disabled)';
     if (!visible(el)) line += ' (hidden)';
     if (el.id) line += ' #' + el.id;
+    if (opts.boxes) line += boxOf(el);
     return line;
+  }
+
+  /* " [x,y wxh]" in viewport pixels: where the control sits on screen, so a
+     layout can be reasoned about as text, and a canvas point picked (xy=) */
+  function boxOf(el) {
+    var r = null;
+    try { r = el.getBoundingClientRect(); } catch (e) {}
+    if (!r || (!r.width && !r.height)) return '';
+    return ' [' + Math.round(r.left) + ',' + Math.round(r.top) + ' ' +
+      Math.round(r.width) + 'x' + Math.round(r.height) + ']';
   }
 
   function snap(opts) {
@@ -281,14 +301,28 @@
     if (!root) throw new Error('selector not found: ' + opts.sel);
     var max = opts.max || 400;
     var out = [], count = 0, skipped = 0;
-    var sel = INTERACTIVE + (opts.headings === false ? '' : ',h1,h2,h3,h4,legend,[role=heading]');
+    var sel = INTERACTIVE + (opts.headings === false ? '' : ',h1,h2,h3,h4,legend,[role=heading]') +
+      (opts.boxes ? ',canvas,svg,img,video,iframe' : '');
     var nodes = root.querySelectorAll(sel);
 
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i];
       if (/^(H[1-4]|LEGEND)$/.test(el.tagName) || el.getAttribute('role') === 'heading') {
         var h = clean(el.textContent, 100);
-        if (h) out.push(el.tagName.toLowerCase() + ' ' + h);
+        if (h) out.push(el.tagName.toLowerCase() + ' ' + h + (opts.boxes ? boxOf(el) : ''));
+        continue;
+      }
+      /* with --boxes, the visual surfaces get a line too: they are what a
+         screenshot would be taken for, and xy= targets land inside them */
+      if (opts.boxes && /^(CANVAS|svg|IMG|VIDEO|IFRAME)$/.test(el.tagName) && !el.matches(INTERACTIVE)) {
+        /* an icon inside a button or link is already that control's line */
+        if (el.parentElement && el.parentElement.closest(INTERACTIVE + ',svg')) continue;
+        if (!visible(el)) continue;
+        if (count >= max) { skipped++; continue; }
+        count++;
+        var cap = clean(el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title') || '', 60);
+        out.push('@' + ref(el) + ' ' + el.tagName.toLowerCase() + (cap ? ' "' + cap + '"' : '') +
+          (el.id ? ' #' + el.id : '') + boxOf(el));
         continue;
       }
       if (el.type === 'hidden') continue;
@@ -454,7 +488,7 @@
     return { x: r.left + r.width / 2, y: r.top + r.height / 2, layout: true };
   }
 
-  function mouseEvt(type, x, y, related) {
+  function mouseEvt(type, x, y, related, buttons) {
     var enter = type === 'mouseenter' || type === 'pointerenter';
     var PE = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
     var Ctor = type.indexOf('pointer') === 0 ? PE : MouseEvent;
@@ -468,7 +502,7 @@
       screenY: y,
       relatedTarget: related || null,
       button: 0,
-      buttons: 0
+      buttons: buttons || 0
     };
     if (Ctor !== MouseEvent) {
       init.pointerId = 1;
@@ -620,13 +654,167 @@
     };
   }
 
-  function click(target) {
+  /* A point to act on: xy=X,Y as given, or an element's center. `at` ("x,y")
+     is an offset from the element's top-left corner instead of the center —
+     a spot inside a canvas, a slider's track, a cell of a drawn chart. */
+  function pointFor(target, at) {
+    var xy = xyOf(target);
     var el = need(target);
-    if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
-    if (typeof el.focus === 'function') { try { el.focus({ preventScroll: true }); } catch (e) {} }
-    fireAll(el, ['mousedown', 'mouseup']);
-    el.click();
-    return { clicked: clean(accName(el) || el.tagName, 60), url: location.href };
+    if (xy) return { el: el, x: xy.x, y: xy.y, layout: true };
+    if (typeof el.scrollIntoView === 'function') {
+      try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+    }
+    var m = at != null && /^(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/.exec(String(at).trim());
+    if (at != null && !m) throw new Error('--at wants x,y in pixels from the top-left corner: ' + at);
+    if (!m) { var c = pointOf(el); c.el = el; return c; }
+    var r = el.getBoundingClientRect();
+    if (!r.width && !r.height) return { el: el, x: 1, y: 1, layout: false };
+    return { el: el, x: r.left + Number(m[1]), y: r.top + Number(m[2]), layout: true };
+  }
+
+  function click(target, at) {
+    if (!xyOf(target) && at == null) {
+      var el = need(target);
+      if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
+      if (typeof el.focus === 'function') { try { el.focus({ preventScroll: true }); } catch (e) {} }
+      fireAll(el, ['mousedown', 'mouseup']);
+      el.click();
+      return { clicked: clean(accName(el) || el.tagName, 60), url: location.href };
+    }
+    /* a point: the full pointer sequence, with coordinates, on whatever is
+       drawn there. el.click() would carry none, and a canvas needs them. */
+    var p = pointFor(target, at);
+    var hit = (p.layout && document.elementFromPoint(p.x, p.y)) || p.el;
+    if (p.el.contains(hit) === false && !xyOf(target)) hit = p.el;
+    [['pointerdown', 1], ['mousedown', 1], ['pointerup', 0], ['mouseup', 0], ['click', 0]].forEach(function (s) {
+      hit.dispatchEvent(mouseEvt(s[0], p.x, p.y, null, s[1]));
+    });
+    return { clicked: clean(accName(hit) || hit.tagName, 60), x: Math.round(p.x), y: Math.round(p.y), layout: p.layout, url: location.href };
+  }
+
+  /* --------------------------------------------------------- drag & drop */
+
+  /* DragEvent with a DataTransfer where the browser has them; elsewhere a
+     MouseEvent carrying the same dataTransfer property, which is all a
+     listener reads. */
+  function dragEvt(type, x, y, dt) {
+    var init = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, screenX: x, screenY: y, buttons: 1 };
+    var ev = null;
+    if (typeof DragEvent === 'function') {
+      try { init.dataTransfer = dt; ev = new DragEvent(type, init); } catch (e) { ev = null; }
+    }
+    if (!ev) ev = new MouseEvent(type, init);
+    if (ev.dataTransfer !== dt) {
+      try { Object.defineProperty(ev, 'dataTransfer', { value: dt }); } catch (e) {}
+    }
+    return ev;
+  }
+
+  function newTransfer() {
+    if (typeof DataTransfer === 'function') return new DataTransfer();
+    throw new Error('this page has no DataTransfer: drag & drop is not available here');
+  }
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  /* Two families of drag exist, and a page uses one or the other:
+     - HTML5 (draggable=true, SortableJS, Gutenberg, most file dropzones):
+       dragstart → dragenter/dragover → drop → dragend, sharing a DataTransfer;
+     - pointer-driven (jQuery UI sortable, ACF repeaters, menus, dnd-kit,
+       react-beautiful-dnd): mousedown, several mousemoves, mouseup.
+     `auto` picks HTML5 when the source sits in a [draggable=true]. */
+  function drag(cmd) {
+    var s = pointFor(cmd.target, cmd.from);
+    var d = pointFor(cmd.to, cmd.at);
+    if (!s.layout || !d.layout) {
+      throw new Error('no layout on this tab: drag needs real coordinates — `beam open` the page in Beam\'s window');
+    }
+    if (cmd.mode && !/^(auto|html5|mouse)$/.test(cmd.mode)) throw new Error('--mode is html5, mouse or auto: ' + cmd.mode);
+    /* the press comes first, in both families: SortableJS only sets
+       draggable=true on the item once the pointer is down on it */
+    s.el.dispatchEvent(mouseEvt('pointerdown', s.x, s.y, null, 1));
+    s.el.dispatchEvent(mouseEvt('mousedown', s.x, s.y, null, 1));
+    var handle = s.el.closest ? s.el.closest('[draggable="true"]') : null;
+    var mode = cmd.mode && cmd.mode !== 'auto' ? cmd.mode : (handle ? 'html5' : 'mouse');
+    var steps = Math.max(2, Math.min(Number(cmd.steps) || 12, 60));
+    var label = {
+      dragged: clean(accName(s.el) || s.el.tagName, 50),
+      to: clean(accName(d.el) || d.el.tagName, 50),
+      mode: mode
+    };
+
+    if (mode === 'html5') {
+      var src = handle || s.el;
+      var dt = newTransfer();
+      var started = src.dispatchEvent(dragEvt('dragstart', s.x, s.y, dt));
+      if (!started) return Object.assign(label, { accepted: false, note: 'the page cancelled dragstart' });
+      var last = null, accepted = false;
+      return (function move(i) {
+        if (i > steps) return Promise.resolve();
+        var x = s.x + (d.x - s.x) * i / steps, y = s.y + (d.y - s.y) * i / steps;
+        var over = document.elementFromPoint(x, y) || d.el;
+        if (over !== last) {
+          if (last) last.dispatchEvent(dragEvt('dragleave', x, y, dt));
+          over.dispatchEvent(dragEvt('dragenter', x, y, dt));
+          last = over;
+        }
+        src.dispatchEvent(dragEvt('drag', x, y, dt));
+        /* a drop target says yes by cancelling dragover */
+        accepted = !over.dispatchEvent(dragEvt('dragover', x, y, dt));
+        return sleep(16).then(function () { return move(i + 1); });
+      })(1).then(function () {
+        var at = last || d.el;
+        if (accepted) at.dispatchEvent(dragEvt('drop', d.x, d.y, dt));
+        else at.dispatchEvent(dragEvt('dragleave', d.x, d.y, dt));
+        src.dispatchEvent(dragEvt('dragend', d.x, d.y, dt));
+        return Object.assign(label, { accepted: accepted });
+      });
+    }
+
+    var under = s.el;
+    return (function move(i) {
+      if (i > steps) return Promise.resolve();
+      var x = s.x + (d.x - s.x) * i / steps, y = s.y + (d.y - s.y) * i / steps;
+      under = document.elementFromPoint(x, y) || under;
+      under.dispatchEvent(mouseEvt('pointermove', x, y, null, 1));
+      under.dispatchEvent(mouseEvt('mousemove', x, y, null, 1));
+      return sleep(16).then(function () { return move(i + 1); });
+    })(1).then(function () {
+      var end = document.elementFromPoint(d.x, d.y) || d.el;
+      end.dispatchEvent(mouseEvt('pointerup', d.x, d.y, null, 0));
+      end.dispatchEvent(mouseEvt('mouseup', d.x, d.y, null, 0));
+      return label;
+    });
+  }
+
+  /* Files (bytes fetched by the service worker or read by the CLI) or text,
+     dropped onto a target as if dragged in from the desktop: the dropzones
+     that have no input[type=file] to upload into. */
+  function drop(cmd) {
+    var p = pointFor(cmd.target, cmd.at);
+    var el = p.el;
+    var dt = newTransfer();
+    var names = [];
+    (cmd.files || []).forEach(function (f) {
+      var bin = atob(f.b64);
+      var buf = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      dt.items.add(new File([buf], f.name, { type: f.mime || 'application/octet-stream' }));
+      names.push(f.name);
+    });
+    if (cmd.text != null) dt.setData('text/plain', String(cmd.text));
+    if (!names.length && cmd.text == null) throw new Error('nothing to drop: give a file or --text');
+    /* the page-wide dragenter is what makes most dropzones appear */
+    if (document.body && document.body !== el) document.body.dispatchEvent(dragEvt('dragenter', p.x, p.y, dt));
+    el.dispatchEvent(dragEvt('dragenter', p.x, p.y, dt));
+    var accepted = !el.dispatchEvent(dragEvt('dragover', p.x, p.y, dt));
+    var taken = !el.dispatchEvent(dragEvt('drop', p.x, p.y, dt));
+    return {
+      dropped: names.length ? names.join(', ') : clean(cmd.text, 40),
+      on: clean(accName(el) || el.tagName, 50),
+      /* a target that never cancels dragover or drop most likely ignored it */
+      accepted: accepted || taken
+    };
   }
 
   function press(key, target) {
@@ -729,13 +917,55 @@
     return { y: window.scrollY, height: document.body.scrollHeight };
   }
 
+  /* --------------------------------------------------------------- visual */
+
+  /* Where an element is on screen, for `shot <target>` to crop to it. */
+  function rect(cmd) {
+    var el = need(cmd.target);
+    /* instant: a smooth-scrolling page would still be moving at the capture */
+    if (typeof el.scrollIntoView === 'function') {
+      try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+    }
+    var r = el.getBoundingClientRect();
+    if (!r.width && !r.height) throw new Error('the element has no size on screen: ' + cmd.target);
+    return {
+      x: r.left, y: r.top, w: r.width, h: r.height,
+      dpr: window.devicePixelRatio || 1,
+      vw: window.innerWidth, vh: window.innerHeight
+    };
+  }
+
+  /* `shot --marks`: a fresh snap, plus the box of every ref that is on screen,
+     so the service worker can draw the @n labels onto the screenshot. What
+     the agent sees in the picture is then a ref it can act on. */
+  function marks(cmd) {
+    var s = snap({ sel: cmd.sel, max: cmd.max, boxes: true });
+    var vw = window.innerWidth, vh = window.innerHeight, boxes = [];
+    for (var i = 0; i < B.refs.length; i++) {
+      var r = B.refs[i].getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (r.right < 0 || r.bottom < 0 || r.left > vw || r.top > vh) continue;
+      if (!visible(B.refs[i])) continue;
+      boxes.push({ ref: i, x: r.left, y: r.top, w: r.width, h: r.height });
+    }
+    s.boxes = boxes;
+    s.dpr = window.devicePixelRatio || 1;
+    s.vw = vw;
+    s.vh = vh;
+    return s;
+  }
+
   /* ---------------------------------------------------------------- run */
 
   var OPS = {
     info: function () { return { url: location.href, title: document.title, ready: document.readyState }; },
     snap: snap, outline: outline, fields: fields, text: text, html: html,
-    click: function (c) { return click(c.target); },
+    click: function (c) { return click(c.target, c.at); },
     hover: function (c) { return hover(c.target); },
+    drag: drag,
+    drop: drop,
+    rect: rect,
+    marks: marks,
     fill: function (c) { return fill(c.target, c.value); },
     set: function (c) { return setMany(c.map || {}, !!c.dry); },
     select: function (c) { return select(c.target, c.value); },

@@ -81,8 +81,10 @@ beam fields --hidden | grep -i "input:file"
 beam upload "css=#the-right-one" "https://…/photo.jpg" --name "name.jpg"
 ```
 
-Drag & drop is not supported. If dragging is the only way, find another one: a
-dedicated upload page, a "from URL" field, or the CMS API.
+If a dropzone is the only way in: `beam drop "css=<the zone>" ./photo.jpg`.
+Most zones appear on a page-wide dragenter, which `drop` sends first; if it
+says the target did not accept it, try the zone's inner element, or the
+`body`. Reordering (galleries, menus, repeaters) is `beam drag <item> <dest>`.
 
 ## 7. Saving as a draft
 
