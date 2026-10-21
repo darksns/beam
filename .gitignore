@@ -6,3 +6,4 @@ package-lock.json
 .serena/
 dist/
 plan-to-go-live.md
+launch-posts.md
