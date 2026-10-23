@@ -214,7 +214,11 @@ chrome.runtime.onInstalled.addListener(() => {
   connect();
   chrome.alarms.create('beam-keepalive', { periodInMinutes: 0.5 });
 });
-chrome.alarms.onAlarm.addListener(connect);
+chrome.alarms.onAlarm.addListener(() => { connect(); reapIdle(); });
+/* Chrome may drop alarms on a browser restart, and the reaper rides on this one */
+chrome.alarms.get('beam-keepalive').then((a) => {
+  if (!a) chrome.alarms.create('beam-keepalive', { periodInMinutes: 0.5 });
+}).catch(() => {});
 connect();
 
 /* messages from the popup */
@@ -309,6 +313,11 @@ const DEFAULT_SESSION = 'default';
    failed command does not stall the session. */
 const lanes = new Map();
 const LANE_MS = 45000;
+
+/* Agents finish and leave their window behind. A session nobody has driven
+   for this long loses the tab Beam opened for it, and the window goes with it
+   when nothing else is in it. */
+const IDLE_MS = 10 * 60 * 1000;
 function lane(name, fn) {
   const prev = lanes.get(name) || Promise.resolve();
   const run = prev.then(fn, fn);
@@ -333,7 +342,7 @@ function sessionName(cmd) {
 }
 
 function slot(name) {
-  return sessions[name] || (sessions[name] = { curTab: null, curUrl: null, beamWindow: null, beamTab: null });
+  return sessions[name] || (sessions[name] = { curTab: null, curUrl: null, beamWindow: null, beamTab: null, lastUsed: Date.now() });
 }
 
 function normalizeSlot(s) {
@@ -341,7 +350,9 @@ function normalizeSlot(s) {
     curTab: s && s.curTab != null ? s.curTab : null,
     curUrl: s && s.curUrl != null ? s.curUrl : null,
     beamWindow: s && s.beamWindow != null ? s.beamWindow : null,
-    beamTab: s && s.beamTab != null ? s.beamTab : null
+    beamTab: s && s.beamTab != null ? s.beamTab : null,
+    /* a slot saved before this field existed gets a full idle period */
+    lastUsed: s && typeof s.lastUsed === 'number' ? s.lastUsed : Date.now()
   };
 }
 
@@ -492,6 +503,52 @@ async function targetTab(cmd, name) {
     catch (e) { await bind(name, null); }
   }
   throw new Error('no tab bound: beam open <url>, or beam use <id>');
+}
+
+/* Closes the tab this session opened, and with it the window when nothing
+   else is in it, then forgets the session. A tab bound with `use` belongs to
+   the person: it is unbound, never closed. */
+async function endSession(name) {
+  const s = sessions[name];
+  if (!s) return { ended: false, closed: null, session: name };
+  let closed = null;
+  if (s.beamTab != null) {
+    try {
+      const t = await chrome.tabs.get(s.beamTab);
+      if (s.beamWindow == null || t.windowId === s.beamWindow) {
+        await chrome.tabs.remove(t.id);
+        closed = t.id;
+      }
+    } catch (e) {}
+  }
+  delete sessions[name];
+  if (closed != null) {
+    for (const n of Object.keys(sessions)) {
+      if (sessions[n].curTab === closed) { sessions[n].curTab = null; sessions[n].curUrl = null; }
+    }
+  }
+  await saveSessions();
+  return { ended: true, closed: closed, session: name };
+}
+
+/* Runs in the session's lane, so it never closes a window under a command,
+   and checks again there: a command queued ahead of it counts as use. The
+   window the person last focused stays, they may be working in it. */
+async function reapIdle() {
+  await bindReady;
+  for (const n of Object.keys(sessions)) {
+    const s = sessions[n];
+    if (s.beamTab == null || Date.now() - s.lastUsed < IDLE_MS) continue;
+    lane(n, async () => {
+      const cur = sessions[n];
+      if (!cur || cur.beamTab == null || Date.now() - cur.lastUsed < IDLE_MS) return;
+      await freshen(n);
+      if (cur.beamTab == null) return;
+      if (cur.beamWindow != null && cur.beamWindow === await focusedWindowId()) return;
+      const out = await endSession(n);
+      note('idle-close', { session: n, tab: out.closed });
+    }).catch(() => {});
+  }
 }
 
 async function focusedWindowId() {
@@ -1135,6 +1192,10 @@ async function dispatch(cmd) {
   await bindReady;
   const name = sessionName(cmd);
   if (cmd.op !== 'ping' && cmd.op !== 'reloadext') await freshen(name);
+  if (sessions[name] && cmd.op !== 'end') {
+    sessions[name].lastUsed = Date.now();
+    await saveSessions();
+  }
   switch (cmd.op) {
 
     case 'ping':
@@ -1221,6 +1282,9 @@ async function dispatch(cmd) {
       await saveSessions();
       return { closed: t.id, session: name };
     }
+
+    case 'end':
+      return endSession(name);
 
     case 'reload': {
       const t = await targetTab(cmd, name);

@@ -1,0 +1,16 @@
+{
+  "description": "Closes the chat's Beam window when the Claude Code session ends.",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/beam\" end --hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

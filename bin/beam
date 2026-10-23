@@ -26,7 +26,7 @@ function token() {
 /* value-less flags: otherwise they would swallow the argument that follows
    (e.g. `beam set --dry '{...}'`) */
 const BOOL = new Set(['json', 'dry', 'hidden', 'raw', 'background', 'stop', 'all', 'force', 'focus', 'new', 'failed', 'clear',
-  'boxes', 'marks', 'png', 'hires']);
+  'boxes', 'marks', 'png', 'hires', 'hook']);
 
 const argv = process.argv.slice(2);
 const op = argv.shift();
@@ -58,7 +58,10 @@ const HELP = `beam — drive Chrome as text
                                                     turn it on in the Beam panel first
 
   act
-    beam open <url> [--new] [--focus]   its own window, unfocused; reuses that session's tab
+    beam open <url> [--new] [--focus]   its own window, unfocused; reuses that session's tab.
+                                        Closed after 10 minutes without commands
+    beam end                            close this session's window and forget the session
+                                        (the Claude Code plugin does it when a chat ends)
     beam focus                          bring the Beam window forward
     beam nav <url> | reload | back | forward | close | use <tab> [--focus]
     beam click <target> [--at x,y]      --at: a point inside it, from its top-left corner
@@ -274,6 +277,10 @@ function render(op, r) {
   if (op === 'tabs') {
     return r.map((t) => `${t.current ? '*' : ' '} [${t.tab}]${t.beam ? ' beam:' + t.beam : ''} ${(t.title || '').slice(0, 60)}\n      ${t.url}`).join('\n');
   }
+  if (op === 'end') {
+    return r.ended ? `session ${r.session} ended` + (r.closed != null ? ` · tab ${r.closed} closed` : '')
+      : `no session ${r.session}`;
+  }
   if (op === 'sessions') {
     if (!r.length) return 'no sessions';
     return r.map((s) => `${s.current ? '*' : ' '} ${s.session}  [${s.tab == null ? '—' : s.tab}]  ${s.title || ''}\n      ${s.url || ''}`).join('\n');
@@ -368,6 +375,25 @@ After an update: beam extension && beam reloadext`);
     if (h && !h.unauthorized) { console.log(JSON.stringify(h, null, 2)); return; }
     await ensureServer();
     console.log(JSON.stringify(await health(), null, 2));
+    return;
+  }
+
+  /* SessionEnd hook: the chat id comes on stdin. A hub that is not running has
+     no window to close, so it is not started, and nothing here fails the hook. */
+  if (op === 'end' && opts.hook) {
+    try {
+      const h = await health();
+      if (!h || h.unauthorized) return;
+      const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+      const session = sessionOf(undefined, { CLAUDE_CODE_SESSION_ID: input.session_id || '' });
+      if (session === 'default') return;
+      await fetch(BASE + '/cmd', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-beam-token': token() },
+        body: JSON.stringify({ op: 'end', session }),
+        signal: AbortSignal.timeout(5000)
+      });
+    } catch (e) {}
     return;
   }
 

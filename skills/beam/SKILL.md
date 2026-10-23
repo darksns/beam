@@ -29,7 +29,8 @@ See **Visual pages**. The normal flow is:
 1. `beam open <url>` once. It uses a Chrome window of its own that stays
    unfocused, and every later `open` reuses that same tab. Do not pass `--new`.
    Do not pass `--focus` unless the person asked to look at it. Do not
-   `beam close` when the task is done: the window is meant to stay.
+   `beam close` when the task is done: Beam closes the window by itself after
+   10 minutes without commands, and when the Claude Code chat ends.
    Two Claude Code chats already get two windows: the CLI names the session
    from `CLAUDE_CODE_SESSION_ID` (a Cursor chat uses `CURSOR_CONVERSATION_ID`).
    Do not export `BEAM_SESSION` unless you want a stable name, or one window
@@ -114,6 +115,7 @@ log is off`, ask them to open the Beam panel and press **Enable network log**
 
 ```
 beam open <url> [--new] [--focus]   its own window, unfocused; reuses that session's tab
+beam end                            close this session's window and forget the session
 beam focus                          bring the Beam window forward
 beam nav <url> | reload | back | forward | close | use <tab> [--focus]
 beam click <target>
@@ -250,7 +252,8 @@ beam open https://example.com/wp-admin
 
 `beam sessions` lists them. `beam tabs` marks each owned tab with `beam:<name>`
 and `*` for the tab this session is bound to. Do not close the tab when the
-task is done.
+task is done: a session with no command for 10 minutes loses its window, and
+the next `beam open` makes a new one. `beam end` closes it now.
 
 ## The tab guard
 

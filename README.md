@@ -133,8 +133,19 @@ chat each get their own window, from the chat id those tools already export.
 window and tab, and will not take a tab another session owns. A terminal with
 no chat id and no name shares the session `default`.
 
+A session window does not pile up: after 10 minutes without commands Beam
+closes the tab it opened (and the window, when nothing else is in it), and the
+next `open` makes a new one. The window you last focused is left alone. The
+Claude Code plugin also runs `beam end` when a chat ends, through a
+`SessionEnd` hook. Installed from npm, add it to `~/.claude/settings.json`
+yourself:
+
+```json
+{ "hooks": { "SessionEnd": [{ "hooks": [{ "type": "command", "command": "beam end --hook" }] }] } }
+```
+
 Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `ping` · `tabs` · `frames` · `sessions` · `network`
-Act: `open` · `focus` · `nav` · `reload` · `back` · `forward` · `close` · `use` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
+Act: `open` · `end` · `focus` · `nav` · `reload` · `back` · `forward` · `close` · `use` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
 `drop` · `drag` · `set` · `do` · `wait` · `scroll` · `shot` · `viewport`
 
 Targets are `@12` (a ref from the last snap), `@3:12` (ref 12 inside frame 3),
