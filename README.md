@@ -144,6 +144,14 @@ yourself:
 { "hooks": { "SessionEnd": [{ "hooks": [{ "type": "command", "command": "beam end --hook" }] }] } }
 ```
 
+`beam open --incognito <url>` puts the session in an Incognito window: no
+cookies or logins from your profile, nothing left behind when it closes. The
+session stays Incognito until `beam end` (or the idle close). Chrome lets an
+extension in only after you turn on **Allow in Incognito** in Beam's
+Details page on `chrome://extensions`; until then the command says so and opens
+nothing. Every Incognito window shares one cookie jar, so two Incognito sessions
+(and your own Incognito windows) see each other's logins.
+
 Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `ping` · `tabs` · `frames` · `sessions` · `network`
 Act: `open` · `end` · `focus` · `nav` · `reload` · `back` · `forward` · `close` · `use` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
 `drop` · `drag` · `set` · `do` · `wait` · `scroll` · `shot` · `viewport`
@@ -304,6 +312,9 @@ on a control that is still hidden.
 the handshake, WebSocket framing up to 200 KB payloads, that an unauthorized
 or page-originated request is refused, that a leftover copy is told it was
 replaced, and that a silent socket is dropped instead of timing out.
+`test/incognito.test.js` checks that `open --incognito` opens an Incognito
+window, keeps the session Incognito until `end`, and opens nothing when Chrome
+has not let Beam into Incognito.
 
 ## Contributing
 

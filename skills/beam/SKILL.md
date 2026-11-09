@@ -115,6 +115,7 @@ log is off`, ask them to open the Beam panel and press **Enable network log**
 
 ```
 beam open <url> [--new] [--focus]   its own window, unfocused; reuses that session's tab
+beam open <url> --incognito         the same, in an Incognito window (no logins); sticky until `beam end`
 beam end                            close this session's window and forget the session
 beam focus                          bring the Beam window forward
 beam nav <url> | reload | back | forward | close | use <tab> [--focus]
@@ -254,6 +255,13 @@ beam open https://example.com/wp-admin
 and `*` for the tab this session is bound to. Do not close the tab when the
 task is done: a session with no command for 10 minutes loses its window, and
 the next `beam open` makes a new one. `beam end` closes it now.
+
+`beam open --incognito <url>` only when the person asks for Incognito (a
+logged-out check, a clean cart, no cookies). The session stays Incognito until
+`beam end`; later `open`s need no flag. If it answers `Beam is not allowed in
+Incognito`, ask the person to turn on **Allow in Incognito** for Beam in
+`chrome://extensions`: do not fall back to a normal window. All Incognito
+windows share one cookie jar.
 
 ## The tab guard
 

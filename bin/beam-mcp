@@ -44,8 +44,9 @@ const RW = { readOnlyHint: false, destructiveHint: false, openWorldHint: true };
 const TOOLS = [
   { name: 'beam_open', title: 'Open a url',
     description: 'Open a url in Beam\'s own Chrome window (unfocused, the same tab is reused).',
-    inputSchema: S({ url: str('the url'), focus: bool('bring the window forward') }, ['url']), annotations: RW,
-    args: (a) => ['open', a.url].concat(a.focus ? ['--focus'] : []) },
+    inputSchema: S({ url: str('the url'), focus: bool('bring the window forward'),
+      incognito: bool('open it in an Incognito window, without the user\'s logins; the session stays Incognito until it ends (beam_command end)') }, ['url']), annotations: RW,
+    args: (a) => ['open', a.url].concat(a.focus ? ['--focus'] : [], a.incognito ? ['--incognito'] : []) },
 
   { name: 'beam_snap', title: 'Read the page',
     description: 'The interactive elements of the bound tab, one per line, with @n refs to act on.',

@@ -342,7 +342,7 @@ function sessionName(cmd) {
 }
 
 function slot(name) {
-  return sessions[name] || (sessions[name] = { curTab: null, curUrl: null, beamWindow: null, beamTab: null, lastUsed: Date.now() });
+  return sessions[name] || (sessions[name] = { curTab: null, curUrl: null, beamWindow: null, beamTab: null, incognito: false, lastUsed: Date.now() });
 }
 
 function normalizeSlot(s) {
@@ -351,6 +351,7 @@ function normalizeSlot(s) {
     curUrl: s && s.curUrl != null ? s.curUrl : null,
     beamWindow: s && s.beamWindow != null ? s.beamWindow : null,
     beamTab: s && s.beamTab != null ? s.beamTab : null,
+    incognito: !!(s && s.incognito),
     /* a slot saved before this field existed gets a full idle period */
     lastUsed: s && typeof s.lastUsed === 'number' ? s.lastUsed : Date.now()
   };
@@ -589,16 +590,42 @@ async function focusTab(tab) {
   return chrome.tabs.get(tab.id);
 }
 
+const INCOGNITO_OFF = 'Beam is not allowed in Incognito: open chrome://extensions, Beam → Details, ' +
+  'turn on "Allow in Incognito", then retry';
+
+async function incognitoAllowed() {
+  try { return !!(chrome.extension && await chrome.extension.isAllowedIncognitoAccess()); }
+  catch (e) { return false; }
+}
+
 /* This session's window: one tab, never focused unless --focus / beam focus.
    A tab that is active in an unfocused window still has layout, which is
-   what hover and Beaver Builder need. Never adopts another session's window. */
+   what hover and Beaver Builder need. Never adopts another session's window.
+   --incognito makes it an Incognito window, and the session stays Incognito
+   until `beam end`. All Incognito windows share one cookie jar, so two
+   Incognito sessions are not isolated from each other. */
 async function ensureBeamTab(name, url, opts) {
   opts = opts || {};
   const s = slot(name);
+  const incognito = opts.incognito === true || s.incognito === true;
+  if (incognito && !(await incognitoAllowed())) throw new Error(INCOGNITO_OFF);
   return withFocus(async () => {
     const prev = await focusedWindowId();
     let reused = false;
     let tab = null;
+
+    /* the session turns Incognito: the normal tab Beam opened for it goes */
+    if (s.beamTab) {
+      try {
+        const t = await chrome.tabs.get(s.beamTab);
+        if (!!t.incognito !== incognito && t.windowId === s.beamWindow && !foreignWindow(t.windowId, name)) {
+          await chrome.tabs.remove(t.id);
+          if (s.curTab === t.id) { s.curTab = null; s.curUrl = null; }
+          s.beamTab = null;
+          s.beamWindow = null;
+        }
+      } catch (e) {}
+    }
 
     if (s.beamTab && !opts.fresh) {
       try {
@@ -622,7 +649,8 @@ async function ensureBeamTab(name, url, opts) {
       reused = true;
     } else if (opts.fresh && s.beamWindow && !foreignWindow(s.beamWindow, name)) {
       try {
-        await chrome.windows.get(s.beamWindow);
+        const w = await chrome.windows.get(s.beamWindow);
+        if (!!w.incognito !== incognito) throw new Error('window mode changed');
         tab = await chrome.tabs.create({ windowId: s.beamWindow, url: url, active: true });
         await waitLoad(tab.id);
         tab = await chrome.tabs.get(tab.id);
@@ -630,14 +658,22 @@ async function ensureBeamTab(name, url, opts) {
     }
 
     if (!tab) {
-      const win = await chrome.windows.create({ url: url, focused: false, type: 'normal' });
+      const spec = { url: url, focused: false, type: 'normal' };
+      if (incognito) spec.incognito = true;
+      const win = await chrome.windows.create(spec);
       tab = (win.tabs && win.tabs[0]) || (await chrome.tabs.query({ windowId: win.id }))[0];
+      /* never fall back to the logged-in profile when Incognito was asked for */
+      if (incognito && !win.incognito) {
+        try { await chrome.windows.remove(win.id); } catch (e) {}
+        throw new Error(INCOGNITO_OFF);
+      }
       await waitLoad(tab.id);
       tab = await chrome.tabs.get(tab.id);
     }
 
     s.beamTab = tab.id;
     s.beamWindow = tab.windowId;
+    s.incognito = incognito;
     await saveSessions();
 
     if (opts.focus) tab = await focusTab(tab);
@@ -1239,7 +1275,7 @@ async function dispatch(cmd) {
         } catch (e) {}
         rows.push({
           session: n, tab: s.curTab, beamTab: s.beamTab, window: s.beamWindow,
-          title: title, url: url, current: n === name
+          incognito: !!s.incognito, title: title, url: url, current: n === name
         });
       }
       rows.sort((a, b) => a.session < b.session ? -1 : a.session > b.session ? 1 : 0);
@@ -1262,12 +1298,13 @@ async function dispatch(cmd) {
 
     case 'open': {
       if (!cmd.url) throw new Error('missing url');
-      const got = await ensureBeamTab(name, cmd.url, { fresh: cmd.new === true, focus: cmd.focus === true });
+      const got = await ensureBeamTab(name, cmd.url,
+        { fresh: cmd.new === true, focus: cmd.focus === true, incognito: cmd.incognito === true });
       await bind(name, got.tab);
       return {
         tab: got.tab.id, url: got.tab.url, title: got.tab.title,
         window: got.tab.windowId, focused: cmd.focus === true, reused: got.reused,
-        session: name
+        incognito: !!got.tab.incognito, session: name
       };
     }
 
