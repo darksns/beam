@@ -189,7 +189,7 @@ function beExtension(socket) {
       parsed.result ? parsed.result.data.length + ' bytes back' : r.body.slice(0, 80));
   }
 
-  /* leftover copy: last-wins, the old socket is told so it stops retrying */
+  /* --- Chrome profiles: one socket each, commands routed by name --------- */
   const PORT3 = PORT + 2;
   const HOME3 = fs.mkdtempSync(path.join(os.tmpdir(), 'beam-test-'));
   const hub3 = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'server.js')], {
@@ -197,28 +197,89 @@ function beExtension(socket) {
     stdio: 'ignore'
   });
   await sleep(600);
-  const a = await upgrade({ Origin: FAKE_EXT }, PORT3);
-  const bWait = a && a.socket ? readText(a.socket, 1200) : Promise.resolve(null);
-  if (a) sendMasked(a.socket, JSON.stringify({ type: 'hello', info: { id: 'ext-a' } }));
-  await sleep(150);
-  const b = await upgrade({ Origin: FAKE_EXT }, PORT3);
-  if (b) sendMasked(b.socket, JSON.stringify({ type: 'hello', info: { id: 'ext-b' } }));
-  const replacedRaw = await bWait;
-  let replaced = {};
-  try { replaced = JSON.parse(replacedRaw || ''); } catch (e) {}
-  ok('a leftover copy is told it was replaced',
-    replaced.type === 'replaced' && replaced.by === 'ext-b',
-    replacedRaw ? replacedRaw.slice(0, 80) : 'no frame');
+  const token3 = fs.readFileSync(path.join(HOME3, 'token'), 'utf8').trim();
+  const cmd3 = async (body) => {
+    const r = await new Promise((resolve) => {
+      const req = http.request({ host: '127.0.0.1', port: PORT3, path: '/cmd', method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-beam-token': token3 } },
+        (res) => { let b = ''; res.on('data', (c) => { b += c; }); res.on('end', () => resolve(b)); });
+      req.on('error', () => resolve('{}'));
+      req.end(JSON.stringify(body));
+    });
+    try { return JSON.parse(r); } catch (e) { return {}; }
+  };
+  /* a fake extension that answers with the profile it lives in */
+  const frames = [];
+  async function profileExt(profileId, name) {
+    const u = await upgrade({ Origin: FAKE_EXT }, PORT3);
+    if (!u) return null;
+    let buf = Buffer.alloc(0);
+    u.socket.on('data', (c) => {
+      buf = Buffer.concat([buf, c]);
+      for (;;) {
+        if (buf.length < 2) return;
+        const opcode = buf[0] & 0x0f;
+        let len = buf[1] & 0x7f, off = 2;
+        if (len === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); off = 4; }
+        if (buf.length < off + len) return;
+        const payload = buf.slice(off, off + len).toString();
+        buf = buf.slice(off + len);
+        if (opcode !== 1) continue;
+        const msg = JSON.parse(payload);
+        frames.push({ to: profileId, msg });
+        if (!msg.id) continue;
+        const result = msg.op === 'sessions' ? [{ session: 'in-' + profileId, tab: 1 }] : { who: profileId, op: msg.op, profile: msg.profile };
+        sendMasked(u.socket, JSON.stringify({ id: msg.id, ok: true, result }));
+      }
+    });
+    sendMasked(u.socket, JSON.stringify({ type: 'hello', info: { id: 'store-id', version: '9', profileId, profile: name } }));
+    await sleep(120);
+    return u.socket;
+  }
+  const work = await profileExt('aaaa1111', 'Work');
+  const home = await profileExt('bbbb2222', 'home');
 
-  const silentP = b && b.socket ? readText(b.socket, 400) : Promise.resolve('missing');
-  const c = await upgrade({ Origin: FAKE_EXT }, PORT3);
-  if (c) sendMasked(c.socket, JSON.stringify({ type: 'hello', info: { id: 'ext-b' } }));
-  const silent = await silentP;
-  let silentMsg = null;
-  try { silentMsg = silent && JSON.parse(silent); } catch (e) {}
-  ok('a service-worker restart with the same id is silent',
-    !silentMsg || silentMsg.type !== 'replaced',
-    silent == null ? 'close/empty' : String(silent).slice(0, 60));
+  const list = await cmd3({ op: 'profiles' });
+  ok('two profiles of the same extension stay connected side by side',
+    list.ok && list.result.length === 2 && list.result[0].profile === 'Work' && list.result[0].default === true,
+    JSON.stringify(list.result || list.error).slice(0, 120));
+
+  ok('no profile named: the first one connected', (await cmd3({ op: 'snap' })).result.who === 'aaaa1111');
+  const toHome = await cmd3({ op: 'snap', profile: 'HOME', session: 's1' });
+  ok('--profile picks by name, any case', toHome.result && toHome.result.who === 'bbbb2222');
+  ok('the hub keeps `profile` to itself', toHome.result && toHome.result.profile === undefined);
+  ok('--profile also takes the #id', (await cmd3({ op: 'snap', profile: '#aaaa1111', session: 's2' })).result.who === 'aaaa1111');
+  ok('a session follows the profile it was opened in', (await cmd3({ op: 'snap', session: 's1' })).result.who === 'bbbb2222');
+  await cmd3({ op: 'end', session: 's1' });
+  ok('`end` forgets the session\'s profile', (await cmd3({ op: 'snap', session: 's1' })).result.who === 'aaaa1111');
+
+  const missing = await cmd3({ op: 'snap', profile: 'nope' });
+  ok('an unknown profile says which ones are connected',
+    missing.ok === false && /no connected Chrome profile is named "nope".*Work, home/.test(missing.error || ''),
+    (missing.error || '').slice(0, 100));
+
+  const all = await cmd3({ op: 'sessions' });
+  ok('`sessions` lists every profile\'s',
+    all.ok && all.result.length === 2 && all.result.some((x) => x.profile === 'home' && x.session === 'in-bbbb2222'),
+    JSON.stringify(all.result || all.error).slice(0, 120));
+
+  /* the person renames a profile in the panel: a second hello on the same socket */
+  sendMasked(home, JSON.stringify({ type: 'hello', info: { profileId: 'bbbb2222', profile: 'personal' } }));
+  await sleep(120);
+  ok('a rename in the panel reaches the hub', (await cmd3({ op: 'snap', profile: 'personal', session: 's3' })).result.who === 'bbbb2222');
+
+  /* a service-worker restart in one profile replaces only that profile's socket */
+  const before = frames.length;
+  const work2 = await profileExt('aaaa1111', 'Work');
+  const after = await cmd3({ op: 'profiles' });
+  ok('a worker restart replaces its own socket, silently, and keeps its place',
+    after.result.length === 2 && after.result[0].id === 'aaaa1111' &&
+    !frames.slice(before).some((f) => f.msg.type === 'replaced'),
+    JSON.stringify(after.result.map((p) => p.label)));
+  const rw = await cmd3({ op: 'snap' });
+  ok('the restarted worker gets the commands', rw.result && rw.result.who === 'aaaa1111', JSON.stringify(rw).slice(0, 120));
+
+  try { work && work.destroy(); work2 && work2.destroy(); home && home.destroy(); } catch (e) {}
   try { hub3.kill(); } catch (e) {}
   fs.rmSync(HOME3, { recursive: true, force: true });
 

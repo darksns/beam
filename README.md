@@ -101,18 +101,34 @@ place that stays put. After an update, `beam extension && beam reloadext`. If
 the CLI says the running hub is an older version, `beam server --stop`: the next
 command starts the new one.
 
-Load **one** copy of the extension only. If two are loaded (a leftover folder
-and this repo), the last one to connect takes the hub; the leftover panel says
-**Another copy is connected** and stops retrying, instead of the two copies
-stealing the socket from each other.
+Load **one** copy of the extension per Chrome profile. Two copies in the same
+profile (a leftover folder and this repo) show up in `beam profiles` as two
+profiles: disable the leftover in `chrome://extensions`.
+
+### Chrome profiles
+
+Install Beam in every Chrome profile it should drive, and give each one a name
+in its panel (the **profile** field). The hub keeps one connection per profile:
+
+```bash
+beam profiles                         # * marks where commands go when none is named
+beam open https://example.com --profile work
+beam snap                             # the session stays in "work" until `beam end`
+BEAM_PROFILE=home beam tabs           # or pick it for a whole terminal
+```
+
+`--profile` takes the name from the panel (any case) or the `#id` that
+`beam profiles` prints for an unnamed profile. With no profile named, a command
+goes to the profile its session was last sent to with one, else to the profile
+that connected first. `beam sessions` lists the sessions of every profile. Beam
+cannot open a profile that is not running: open Chrome on it first.
 
 The installer links `beam`, `beam-mdconv` and `beam-mcp` into `~/.local/bin`, creates
 `~/.beam/` (hub token and site adapters) and, if Claude Code is installed, links
 the two skills into `~/.claude/skills/`. The hub starts by itself on every
 command. The toolbar icon opens a panel with the connection state, an editable
-hub port, the version, the **network log** switch, the sessions, a debug dump,
-and two buttons: **Reconnect** and **Release tab**. A red `!` on the icon means the connection dropped, or that
-another copy took the hub.
+hub port, the profile name, the version, the **network log** switch, the sessions, a debug dump,
+and two buttons: **Reconnect** and **Release tab**. A red `!` on the icon means the connection dropped.
 
 Requires Node 18+ and Chrome (or any Chromium with MV3 extensions).
 
@@ -152,7 +168,7 @@ Details page on `chrome://extensions`; until then the command says so and opens
 nothing. Every Incognito window shares one cookie jar, so two Incognito sessions
 (and your own Incognito windows) see each other's logins.
 
-Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `ping` · `tabs` · `frames` · `sessions` · `network`
+Read: `snap` · `outline` · `fields` · `text` · `html` · `info` · `ping` · `tabs` · `frames` · `sessions` · `profiles` · `network`
 Act: `open` · `end` · `focus` · `nav` · `reload` · `back` · `forward` · `close` · `use` · `click` · `hover` · `fill` · `select` · `check` · `press` · `upload` ·
 `drop` · `drag` · `set` · `do` · `wait` · `scroll` · `shot` · `viewport`
 
@@ -278,8 +294,9 @@ by default — see [SECURITY.md](SECURITY.md) for the details and
   and refuses any request carrying browser fetch metadata: **a web page cannot
   drive your browser through this port.**
 - The WebSocket only accepts an `Origin` of `chrome-extension://…`; set
-  `BEAM_EXTENSION_ID` to pin one specific extension. A second copy with a
-  different id takes over and the leftover is told to stop retrying.
+  `BEAM_EXTENSION_ID` to pin one specific extension. Each Chrome profile keeps
+  its own socket, keyed by a random id the extension stores in that profile; a
+  reconnect with the same id replaces the old socket.
 - The hub pings the extension every 15s and drops a socket that stops
   answering, so a dead service worker fails the next command immediately
   instead of making it wait out its timeout.
@@ -310,8 +327,10 @@ and jQuery through the page shim, hover on a Beaver-style wrench, and `title=`
 on a control that is still hidden.
 `test/hub.test.js` starts a real hub, pretends to be the extension, and checks
 the handshake, WebSocket framing up to 200 KB payloads, that an unauthorized
-or page-originated request is refused, that a leftover copy is told it was
-replaced, and that a silent socket is dropped instead of timing out.
+or page-originated request is refused, that two Chrome profiles stay connected
+and commands reach the one they name (by name, by id, by session), that a
+worker restart replaces only its own socket, and that a silent socket is
+dropped instead of timing out.
 `test/incognito.test.js` checks that `open --incognito` opens an Incognito
 window, keeps the session Incognito until `end`, and opens nothing when Chrome
 has not let Beam into Incognito.

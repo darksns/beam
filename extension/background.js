@@ -4,6 +4,11 @@
 const DEFAULT_PORT = 8777;
 
 let port = DEFAULT_PORT;
+/* Each Chrome profile runs its own copy of the worker, with its own storage:
+   the id tells the hub one profile from another, the name is what the person
+   types after --profile. */
+let profileId = '';
+let profileName = '';
 let ws = null;
 let connecting = false;
 /* One slot per session name. The CLI sends `default` only when nothing names
@@ -87,6 +92,23 @@ async function loadPort() {
   return port;
 }
 
+async function loadProfile() {
+  try {
+    const s = await chrome.storage.local.get(['profileId', 'profileName']);
+    profileId = (s && s.profileId) || '';
+    profileName = (s && s.profileName) || '';
+    if (!profileId) {
+      profileId = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, '0')).join('');
+      await chrome.storage.local.set({ profileId });
+    }
+  } catch (e) {}
+}
+
+function helloInfo() {
+  return { ua: navigator.userAgent, id: chrome.runtime.id, version: chrome.runtime.getManifest().version,
+    profileId, profile: profileName };
+}
+
 async function connect() {
   if (superseded) { noteSkip('superseded'); return; }
   if (connecting) return;
@@ -103,6 +125,7 @@ async function connect() {
       return;
     }
     await loadPort();
+    await loadProfile();
     note('connect', { port });
     socket = new WebSocket(`ws://127.0.0.1:${port}`);
   } catch (e) {
@@ -120,7 +143,7 @@ async function connect() {
     try {
       socket.send(JSON.stringify({
         type: 'hello',
-        info: { ua: navigator.userAgent, id: chrome.runtime.id, version: chrome.runtime.getManifest().version }
+        info: helloInfo()
       }));
       helloSentAt = Date.now();
       note('open', { hello: true });
@@ -245,6 +268,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         connected: !!ws && ws.readyState === WebSocket.OPEN,
         superseded,
         port,
+        profile: profileName,
+        profileId,
         version: chrome.runtime.getManifest().version,
         netLog: await netAllowed(),
         tab: home ? home.tab : null,
@@ -286,6 +311,20 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       }
       await saveSessions();
       reply({ ok: true });
+    })();
+    return true;
+  }
+  if (msg.type === 'setprofile') {
+    (async () => {
+      await loadProfile();
+      profileName = String(msg.name || '').trim().slice(0, 40);
+      await chrome.storage.local.set({ profileName });
+      note('setprofile', { name: profileName });
+      /* a second hello on the open socket renames it; the hub keeps the key */
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'hello', info: helloInfo() }));
+      } catch (e) {}
+      reply({ ok: true, profile: profileName });
     })();
     return true;
   }

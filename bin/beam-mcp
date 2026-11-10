@@ -28,7 +28,9 @@ Refs die on the next snap or navigation. Prefer text tools; beam_shot only when 
 a visual check or a widget cannot be read from the DOM.
 Rules: never type credentials (if a login form shows, ask the user to log in); preview bulk writes
 with beam_set dry:true; ask the user before saving, publishing, submitting or deleting anything.
-If a call says "extension not connected", ask the user to open the Beam panel in Chrome.`;
+If a call says "extension not connected", ask the user to open the Beam panel in Chrome.
+Before the first beam_open, run beam_command ["profiles"]: if it lists two or more Chrome profiles and
+the user named none, ask which one and pass it as beam_open's profile; later calls follow it.`;
 
 /* ---------------------------------------------------------------- tools */
 
@@ -45,8 +47,9 @@ const TOOLS = [
   { name: 'beam_open', title: 'Open a url',
     description: 'Open a url in Beam\'s own Chrome window (unfocused, the same tab is reused).',
     inputSchema: S({ url: str('the url'), focus: bool('bring the window forward'),
-      incognito: bool('open it in an Incognito window, without the user\'s logins; the session stays Incognito until it ends (beam_command end)') }, ['url']), annotations: RW,
-    args: (a) => ['open', a.url].concat(a.focus ? ['--focus'] : [], a.incognito ? ['--incognito'] : []) },
+      incognito: bool('open it in an Incognito window, without the user\'s logins; the session stays Incognito until it ends (beam_command end)'),
+      profile: str('the Chrome profile to open it in, by the name the user gave it in the Beam panel (["profiles"] lists them); later calls follow it') }, ['url']), annotations: RW,
+    args: (a) => ['open', a.url].concat(a.focus ? ['--focus'] : [], a.incognito ? ['--incognito'] : [], a.profile ? ['--profile', a.profile] : []) },
 
   { name: 'beam_snap', title: 'Read the page',
     description: 'The interactive elements of the bound tab, one per line, with @n refs to act on.',
@@ -98,7 +101,7 @@ const TOOLS = [
     description: 'Any other `beam` command, as its argument list: ["nav","<url>"], ["reload"], ["back"], ' +
       '["hover","css=.x"], ["select","label=Status","Draft"], ["check","name=x","off"], ["press","Enter"], ' +
       '["wait","--text","Saved"], ["scroll","--by","600"], ["upload","<target>","<url>"], ["frames"], ' +
-      '["tabs"], ["outline"], ["html","--sel","main"], ["info"], ["network","--type","xhr"], ["sessions"].',
+      '["tabs"], ["outline"], ["html","--sel","main"], ["info"], ["network","--type","xhr"], ["sessions"], ["profiles"].',
     inputSchema: S({ args: { type: 'array', items: { type: 'string' } } }, ['args']), annotations: RW,
     args: (a) => a.args }
 ];

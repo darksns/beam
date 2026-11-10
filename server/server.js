@@ -10,9 +10,14 @@
  *   upgrade (WS)      only accepts an Origin of chrome-extension://…, so a page
  *                     cannot impersonate the extension and hijack the command
  *                     stream. The socket is not adopted until a `hello` frame.
- *                     A second copy with a different runtime id takes over and
- *                     the leftover gets `{type:replaced}` so it stops retrying.
  *                     Pin a single extension with BEAM_EXTENSION_ID.
+ *
+ * One socket per Chrome profile. Each copy of the extension sends a
+ * `profileId` it made up and keeps in its own storage, plus the name the
+ * person gave it in the Beam panel. A command goes to the profile it names
+ * (`profile`), else to the one its session was opened in, else to the profile
+ * that connected first. A new socket with the same profileId is a
+ * service-worker restart and replaces the old one.
  */
 'use strict';
 const http = require('http');
@@ -26,10 +31,9 @@ const PORT = Number(process.env.BEAM_PORT || 8777);
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const EXT_ID = process.env.BEAM_EXTENSION_ID || '';
 
-let sock = null;            // the extension's socket
-let sockInfo = null;
-let alive = false;          // did this socket answer the last keepalive ping?
-const pending = new Map();  // id -> {resolve, timer}
+const conns = new Map();    // profile key -> {key, sock, info, alive, since}
+const pending = new Map();  // id -> {resolve, timer, conn}
+const bound = new Map();    // session name -> profile key it was opened in
 let seq = 0;
 
 /* ----------------------------------------------------------------- token */
@@ -105,11 +109,13 @@ function attachWs(socket) {
       adopt(socket, msg.info || {});
       return;
     }
+    const conn = connOf(socket);
     if (msg.type === 'hello') {
-      if (socket === sock) { sockInfo = Object.assign(sockInfo || {}, msg.info || {}); alive = true; }
+      /* the person renamed the profile in the panel; the key stays */
+      if (conn) { Object.assign(conn.info, msg.info || {}); conn.alive = true; }
       return;
     }
-    if (msg.id && pending.has(msg.id) && socket === sock) {
+    if (msg.id && pending.has(msg.id) && conn && pending.get(msg.id).conn === conn) {
       const p = pending.get(msg.id);
       pending.delete(msg.id);
       clearTimeout(p.timer);
@@ -148,7 +154,7 @@ function attachWs(socket) {
 
       if (opcode === 8) { socket.end(); return; }
       if (opcode === 9) { wsSend(socket, payload, 10); continue; }
-      if (opcode === 10) { if (socket === sock) alive = true; continue; }
+      if (opcode === 10) { const c = connOf(socket); if (c) c.alive = true; continue; }
       if (opcode === 0) {
         frag.push(payload);
         if (fin) { onMessage(Buffer.concat(frag).toString('utf8')); frag = []; }
@@ -162,26 +168,43 @@ function attachWs(socket) {
   socket.on('error', () => {});
   socket.on('close', () => {
     clearTimeout(helloTimer);
-    if (sock === socket) drop('the extension closed the connection');
+    const c = connOf(socket);
+    if (c) drop(c, 'the extension closed the connection');
   });
 }
 
-/* Last writer wins, so loading a new unpacked copy takes over. Same id is a
-   service-worker restart: silent replace. Different id is a leftover copy:
-   tell it, so it stops retrying and flapping the socket. Assign sock before
-   ending the old one — a sync 'close' would otherwise drop the new socket. */
+function connOf(socket) {
+  for (const c of conns.values()) if (c.sock === socket) return c;
+  return null;
+}
+
+/* Extensions older than profiles send no profileId: their runtime id stands in. */
+const keyOf = (info) => String(info.profileId || info.id || '');
+const nameOf = (c) => String(c.info.profile || '').trim();
+const label = (c) => nameOf(c) || (c.key ? '#' + c.key : 'chrome');
+
+/* Same key is a service-worker restart: the new socket takes the slot, keeps
+   its place in the order, and whatever was waiting on the old one fails now
+   instead of timing out (the extension answers on the socket a command came
+   in on). Put the new socket in before ending the old: a sync 'close' would
+   otherwise drop it. */
 function adopt(socket, info) {
-  const newId = info.id || '';
-  const oldId = (sockInfo && sockInfo.id) || '';
-  const other = (sock && sock !== socket) ? sock : null;
-  sock = socket;
-  sockInfo = info;
-  alive = true;
-  if (other) {
-    if (newId !== oldId) {
-      try { wsSend(other, JSON.stringify({ type: 'replaced', by: newId || 'another extension' })); } catch (e) {}
-    }
-    try { other.end(); } catch (e) {}
+  const key = keyOf(info);
+  const old = conns.get(key);
+  const conn = { key, sock: socket, info: Object.assign({}, info), alive: true, since: old ? old.since : Date.now() };
+  conns.set(key, conn);
+  if (old && old.sock !== socket) {
+    failPending(old, 'the extension reconnected while the command was running');
+    try { old.sock.end(); } catch (e) {}
+  }
+}
+
+function failPending(conn, why) {
+  for (const [id, p] of pending) {
+    if (p.conn !== conn) continue;
+    clearTimeout(p.timer);
+    pending.delete(id);
+    p.resolve({ ok: false, error: why });
   }
 }
 
@@ -189,35 +212,113 @@ function adopt(socket, info) {
    service worker died without a FIN — used to sit here forever, and every
    command would wait out its full timeout. Now it is dropped and whatever was
    in flight fails immediately, with an error that says what to do. */
-function drop(why) {
-  if (sock) { try { sock.destroy(); } catch (e) {} }
-  sock = null;
-  sockInfo = null;
-  alive = false;
-  for (const [id, p] of pending) {
-    clearTimeout(p.timer);
-    p.resolve({ ok: false, error: why + ': open the Beam panel in Chrome and press Reconnect' });
-  }
-  pending.clear();
+function drop(conn, why) {
+  try { conn.sock.destroy(); } catch (e) {}
+  if (conns.get(conn.key) === conn) conns.delete(conn.key);
+  failPending(conn, why + ': open the Beam panel in Chrome and press Reconnect');
 }
 
-function send(cmd, timeoutMs) {
+function live() {
+  for (const c of [...conns.values()]) {
+    if (c.sock.destroyed || !c.sock.writable) drop(c, 'the connection to the extension died');
+  }
+  return [...conns.values()].sort((a, b) => a.since - b.since);
+}
+
+const NOT_CONNECTED = 'extension not connected: open Chrome and check that Beam is enabled in chrome://extensions';
+
+/* A name the person gave in the panel (any case), or the id `beam profiles` prints. */
+function find(want) {
+  const all = live();
+  const w = String(want).trim().replace(/^#/, '');
+  const lw = w.toLowerCase();
+  const byKey = all.filter((c) => c.key === w);
+  if (byKey.length) return { conn: byKey[0] };
+  const byName = all.filter((c) => nameOf(c).toLowerCase() === lw);
+  if (byName.length === 1) return { conn: byName[0] };
+  if (byName.length > 1) {
+    return { error: byName.length + ' connected profiles are named "' + w + '": rename one in the Beam panel, ' +
+      'or pass its id (' + byName.map((c) => '#' + c.key).join(', ') + ')' };
+  }
+  return { error: 'no connected Chrome profile is named "' + w + '"' +
+    (all.length ? ' (connected: ' + all.map(label).join(', ') + ')' : '') +
+    '. Open Chrome on that profile, enable Beam there, and give the profile that name in the Beam panel' };
+}
+
+/* explicit profile, else the session's, else the first one connected */
+function route(cmd) {
+  const session = cmd.session != null && cmd.session !== '' ? String(cmd.session) : 'default';
+  if (cmd.profile != null && cmd.profile !== '' && cmd.profile !== true) {
+    const r = find(cmd.profile);
+    if (r.conn) bound.set(session, r.conn.key);
+    return r;
+  }
+  const all = live();
+  if (bound.has(session) && cmd.op !== 'sessions') {
+    const c = conns.get(bound.get(session));
+    if (c && all.includes(c)) return { conn: c };
+    return { error: 'session ' + session + ' was opened in the Chrome profile ' + bound.get(session) +
+      ', which is no longer connected: reopen that profile, or `beam end` the session' };
+  }
+  if (!all.length) return { error: NOT_CONNECTED };
+  return { conn: all[0] };
+}
+
+function send(conn, cmd, timeoutMs) {
   return new Promise((resolve) => {
-    if (sock && (sock.destroyed || !sock.writable)) drop('the connection to the extension died');
-    if (!sock) return resolve({ ok: false, error: 'extension not connected: open Chrome and check that Beam is enabled in chrome://extensions' });
+    if (conn.sock.destroyed || !conn.sock.writable) drop(conn, 'the connection to the extension died');
+    if (conns.get(conn.key) !== conn) return resolve({ ok: false, error: NOT_CONNECTED });
     const id = ++seq;
     const timer = setTimeout(() => {
       pending.delete(id);
       resolve({ ok: false, error: 'the extension is connected but did not answer within ' + timeoutMs +
         'ms. If it keeps happening, check that only one copy of Beam is loaded in chrome://extensions' });
     }, timeoutMs);
-    pending.set(id, { resolve, timer });
-    try { wsSend(sock, JSON.stringify(Object.assign({}, cmd, { id }))); }
+    pending.set(id, { resolve, timer, conn });
+    const out = Object.assign({}, cmd, { id });
+    delete out.profile;
+    try { wsSend(conn.sock, JSON.stringify(out)); }
     catch (e) {
       clearTimeout(timer); pending.delete(id);
       resolve({ ok: false, error: String(e) });
     }
   });
+}
+
+function profiles() {
+  const all = live();
+  return all.map((c, i) => ({
+    profile: nameOf(c), id: c.key, label: label(c), default: i === 0,
+    extension: c.info.id || '', version: c.info.version || '', since: c.since,
+    sessions: [...bound].filter(([, k]) => k === c.key).map(([s]) => s)
+  }));
+}
+
+/* `beam sessions` with no profile named lists every profile's */
+async function sessionsEverywhere(cmd, timeoutMs) {
+  const all = live();
+  if (!all.length) return { ok: false, error: NOT_CONNECTED };
+  const out = [];
+  const errors = [];
+  for (const c of all) {
+    const r = await send(c, cmd, timeoutMs);
+    if (r.ok && Array.isArray(r.result)) for (const s of r.result) out.push(Object.assign({ profile: label(c) }, s));
+    else if (!r.ok) errors.push(label(c) + ': ' + r.error);
+  }
+  if (!out.length && errors.length) return { ok: false, error: errors.join('; ') };
+  return { ok: true, result: out };
+}
+
+async function dispatch(cmd) {
+  const timeoutMs = cmd.timeout || 30000;
+  if (cmd.op === 'profiles') return { ok: true, result: profiles() };
+  const explicit = cmd.profile != null && cmd.profile !== '' && cmd.profile !== true;
+  if (cmd.op === 'sessions' && !explicit && live().length > 1) return sessionsEverywhere(cmd, timeoutMs);
+  const r = route(cmd);
+  if (!r.conn) return { ok: false, error: r.error };
+  const out = await send(r.conn, cmd, timeoutMs);
+  if (cmd.op === 'end') bound.delete(cmd.session != null && cmd.session !== '' ? String(cmd.session) : 'default');
+  return out;
 }
 
 /* ------------------------------------------------------------------ http */
@@ -232,7 +333,9 @@ const server = http.createServer((req, res) => {
   if (!authorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
 
   if (req.url === '/health') {
-    return json(res, 200, { ok: true, version: VERSION, connected: !!sock, browser: sockInfo, pid: process.pid, port: PORT });
+    const all = live();
+    return json(res, 200, { ok: true, version: VERSION, connected: all.length > 0, browser: all.length ? all[0].info : null,
+      profiles: profiles(), pid: process.pid, port: PORT });
   }
   if (req.method !== 'POST' || req.url !== '/cmd') return json(res, 404, { ok: false, error: 'not found' });
 
@@ -241,8 +344,7 @@ const server = http.createServer((req, res) => {
   req.on('end', async () => {
     let cmd;
     try { cmd = JSON.parse(body); } catch (e) { return json(res, 400, { ok: false, error: 'invalid json' }); }
-    const out = await send(cmd, cmd.timeout || 30000);
-    json(res, 200, out);
+    json(res, 200, await dispatch(cmd));
   });
 });
 
@@ -267,10 +369,11 @@ server.on('upgrade', (req, socket) => {
    and a ping that goes unanswered twice in a row means the socket is dead. */
 const PING_MS = Number(process.env.BEAM_PING_MS || 15000);
 setInterval(() => {
-  if (!sock) return;
-  if (!alive) return drop('the extension stopped answering');
-  alive = false;
-  try { wsSend(sock, '', 9); } catch (e) { drop('the connection to the extension died'); }
+  for (const c of [...conns.values()]) {
+    if (!c.alive) { drop(c, 'the extension stopped answering'); continue; }
+    c.alive = false;
+    try { wsSend(c.sock, '', 9); } catch (e) { drop(c, 'the connection to the extension died'); }
+  }
 }, PING_MS);
 
 server.listen(PORT, '127.0.0.1', () => {

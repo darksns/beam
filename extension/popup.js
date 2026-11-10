@@ -3,6 +3,7 @@
 
 const $ = (id) => document.getElementById(id);
 let editingPort = false;
+let editingProfile = false;
 
 function paint(s) {
   const on = !!s.connected;
@@ -15,6 +16,10 @@ function paint(s) {
       ? 'disable the leftover in chrome://extensions'
       : 'the local hub is not answering';
   if (!editingPort) $('port').value = s.port;
+  if (!editingProfile) {
+    $('profile').value = s.profile || '';
+    if (s.profileId) $('profile').placeholder = '#' + s.profileId;
+  }
   $('ver').textContent = s.version;
   paintNetLog(!!s.netLog);
 
@@ -86,6 +91,7 @@ function formatRow(row) {
     case 'replaced': return 'replaced' + (row.by ? ' by ' + row.by : '');
     case 'reconnect': return 'reconnect from panel';
     case 'setport': return 'port set to ' + row.port;
+    case 'setprofile': return 'profile named ' + (row.name ? '"' + row.name + '"' : '(none)');
     case 'skip': return 'skipped (' + row.why + ')';
     case 'fail': return 'connect failed: ' + (row.error || '?');
     case 'send-fail': return 'send failed: ' + (row.error || '?');
@@ -105,6 +111,7 @@ function formatDebug(s) {
     'extension  ' + (d.id || chrome.runtime.id),
     'browser    ' + browserLine(d.ua),
     'port       ' + s.port,
+    'profile    ' + (s.profile ? '"' + s.profile + '" ' : '') + '#' + (s.profileId || '?'),
     'socket     ' + socket + (last && !s.connected ? '   last close ' + last.code + (last.opened ? ' after open' : ' before open') : ''),
     'retry      ' + (d.retry || 0) + (d.connecting ? '   handshake in progress' : ''),
     'worker     ' + (d.workerStarts || 0) + ' starts, this one ' + ago(d.workerAt),
@@ -215,6 +222,15 @@ $('port').addEventListener('change', async () => {
   setTimeout(refresh, 600);
 });
 $('port').addEventListener('blur', () => { editingPort = false; });
+
+$('profile').addEventListener('focus', () => { editingProfile = true; });
+$('profile').addEventListener('change', async () => {
+  await chrome.runtime.sendMessage({ type: 'setprofile', name: $('profile').value });
+  editingProfile = false;
+  refresh();
+});
+$('profile').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('profile').blur(); });
+$('profile').addEventListener('blur', () => { editingProfile = false; });
 
 $('copy').addEventListener('click', async () => {
   const text = $('debug-out').textContent;

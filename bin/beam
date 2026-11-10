@@ -38,7 +38,8 @@ for (let i = 0; i < argv.length; i++) {
     const key = a.slice(2);
     const next = argv[i + 1];
     if (BOOL.has(key) || next === undefined || next.startsWith('--')) opts[key] = true;
-    else { opts[key] = /^\d+$/.test(next) ? Number(next) : next; i++; }
+    /* a profile id like 00c0ffee must keep its zeros */
+    else { opts[key] = /^\d+$/.test(next) && key !== 'profile' ? Number(next) : next; i++; }
   } else positional.push(a);
 }
 
@@ -53,6 +54,8 @@ const HELP = `beam — drive Chrome as text
     beam text    [--sel CSS] [--max N] [--from N]   readable text
     beam html    [--sel CSS] [--max N]              raw HTML
     beam info | tabs | frames | sessions
+    beam profiles                                   the Chrome profiles with Beam connected;
+                                                    * is where commands go when none is named
     beam network [filter] [--type xhr,doc,js,css,img] [--method M] [--failed] [--last N] [--clear]
                                                     requests of the bound tab (no bodies);
                                                     turn it on in the Beam panel first
@@ -63,6 +66,8 @@ const HELP = `beam — drive Chrome as text
                                         Closed after 10 minutes without commands.
                                         --incognito: an Incognito window, no logins; the
                                         session stays Incognito until \`beam end\`
+                                        --profile <name>: in that Chrome profile; the session's
+                                        later commands follow it until \`beam end\`
     beam end                            close this session's window and forget the session
                                         (the Claude Code plugin does it when a chat ends)
     beam focus                          bring the Beam window forward
@@ -93,8 +98,9 @@ const HELP = `beam — drive Chrome as text
 
   target: @12 (ref from snap) · @3:12 (ref inside frame 3) · css=.klass · text=Update
           label=Title · name=post_title · title=Heading Settings · xy=120,40 (viewport point)
-  global: --tab <id>  --session <nome>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
+  global: --tab <id>  --session <nome>  --profile <name>  --frame <id|all>  --json  --vlen <n>  --timeout <ms>
           BEAM_SESSION=<nome>   named window; unset follows the Claude/Cursor chat, else "default"
+          BEAM_PROFILE=<name>   Chrome profile, by the name given in its Beam panel (or its #id)
   setup
     beam extension                      copy the extension to ~/.beam/extension, to load unpacked
     beam server [--stop]                hub status, or stop it (it restarts on the next command)
@@ -249,6 +255,9 @@ function build() {
     throw new Error('--at and --from want x,y');
   }
   if (cmd.frame === 'true') cmd.frame = 'all';
+  if (cmd.profile === true) throw new Error('--profile wants a name (`beam profiles` lists them)');
+  if (cmd.profile == null && process.env.BEAM_PROFILE) cmd.profile = process.env.BEAM_PROFILE;
+  if (cmd.profile != null) cmd.profile = String(cmd.profile);
   cmd.session = sessionOf(opts.session, process.env);
   return cmd;
 }
@@ -286,7 +295,13 @@ function render(op, r) {
   }
   if (op === 'sessions') {
     if (!r.length) return 'no sessions';
-    return r.map((s) => `${s.current ? '*' : ' '} ${s.session}${s.incognito ? ' (incognito)' : ''}  [${s.tab == null ? '—' : s.tab}]  ${s.title || ''}\n      ${s.url || ''}`).join('\n');
+    return r.map((s) => `${s.current ? '*' : ' '} ${s.session}${s.profile ? ' @' + s.profile : ''}${s.incognito ? ' (incognito)' : ''}  [${s.tab == null ? '—' : s.tab}]  ${s.title || ''}\n      ${s.url || ''}`).join('\n');
+  }
+  if (op === 'profiles') {
+    if (!r.length) return 'no Chrome profile connected: open Chrome and check that Beam is enabled there';
+    return r.map((p) => `${p.default ? '*' : ' '} ${p.profile || '(unnamed)'}  #${p.id}  ${p.version ? 'v' + p.version : ''}` +
+      (p.sessions.length ? `  sessions: ${p.sessions.join(', ')}` : '')).join('\n') +
+      (r.some((p) => !p.profile) ? '\n\nname a profile in its Beam panel (the toolbar icon), or pass its #id' : '');
   }
   if (op === 'fields') {
     const cut = (v) => {

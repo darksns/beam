@@ -23,7 +23,9 @@ none of them.
 **Origin on the socket.** The WebSocket upgrade is accepted only from an
 `Origin` starting with `chrome-extension://`, so a page cannot impersonate the
 extension and take over the command stream. Set `BEAM_EXTENSION_ID=<id>` to
-accept one specific extension and nothing else.
+accept one specific extension and nothing else. Each Chrome profile gets its
+own socket, keyed by a random id that profile's copy of the extension keeps in
+its own storage; a new socket replaces only the one with the same id.
 
 ## What the hub does not do
 

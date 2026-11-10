@@ -52,7 +52,7 @@ beam outline [--sel CSS] [--depth N]            # the HTML structure tree
 beam fields  [--sel CSS] [--hidden] [--vlen N]  # every form field, as JSON
 beam text    [--sel CSS] [--max N] [--from N]   # readable text
 beam html    [--sel CSS] [--max N]              # raw HTML (use it last)
-beam info | tabs | frames | sessions
+beam info | tabs | frames | sessions | profiles
 beam network [filter] [--type xhr,doc,js,css,img] [--method M] [--failed] [--last N] [--clear]
 ```
 
@@ -255,6 +255,20 @@ beam open https://example.com/wp-admin
 and `*` for the tab this session is bound to. Do not close the tab when the
 task is done: a session with no command for 10 minutes loses its window, and
 the next `beam open` makes a new one. `beam end` closes it now.
+
+Chrome profiles: run `beam profiles` before the first `beam open` of a task.
+- The person named one ("in my work profile"): pass `--profile <name>` on that
+  `open`. If the name is not listed, ask them to open Chrome on that profile
+  and name it in its Beam panel (the **profile** field): Beam cannot open a
+  profile itself.
+- One profile listed, or `BEAM_PROFILE` is set: no flag, no question.
+- Two or more listed and none named: ask the person which one to use, listing
+  the names (`#id` for an unnamed one), and wait for the answer before
+  opening anything. Do not guess from the site: a profile without the login
+  shows a login page, not an error.
+
+The session's later commands follow the profile of that `open` until
+`beam end`, so ask once per task, not per command.
 
 `beam open --incognito <url>` only when the person asks for Incognito (a
 logged-out check, a clean cart, no cookies). The session stays Incognito until
